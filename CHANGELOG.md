@@ -3,6 +3,16 @@
 Notable changes to Claude Sessions. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.2 — 2026-07-29
+
+### Fixed
+
+- Icons drew at 40 px in list rows and editor tabs. `IconLoader` sizes an SVG from its
+  `width`/`height` attributes rather than its `viewBox`, and the 1.0.1 icon change flattened
+  all fourteen files to 40 — losing the 13 px stripe, 20 px new-UI stripe and 16 px row sizes
+  the originals declared. Restored, and `IconResourcesTest` now asserts the declared size of
+  every icon so this cannot pass silently again.
+
 ## 1.0.1 — 2026-07-29
 
 ### Changed
