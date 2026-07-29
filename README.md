@@ -22,6 +22,22 @@ waiting for input, and opens any of them as an editor tab.
 - **Settings** under *Settings → Tools → Claude Sessions*, or the gear in the tool window:
   background fetch interval, and a switch to turn background fetching off entirely.
 
+## Screenshots
+
+The session list beside a session resumed in the main editor area rather than the Terminal
+tool window. The selected row is working, so it shows a spinner; the others are alive and
+show the orange Claude mark, with the git branch and last activity beneath each title. The
+`+` button started the middle session, which was listed immediately and will be named once
+Claude has something to call it. Bottom right is a turn-end notification, with the action
+that jumps to the session it came from:
+
+![The Claude Sessions tool window, a session running in an editor tab, and a turn-end notification](docs/images/session-tab.png)
+
+Usage limits, read from the payload Claude already caches rather than from the API — which is
+why the popup is honest about how stale the figures may be:
+
+![The usage limits popup showing the 5-hour, weekly all-models and weekly per-model windows](docs/images/usage-limits.png)
+
 Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
