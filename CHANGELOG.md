@@ -59,6 +59,17 @@ oversights:
   editor.
 - No horizontal scrollbar in the session list.
 
+### Changed after release
+
+- The plugin is named **Sessions for Claude Code** — descriptive rather than possessive, since
+  it works with Claude Code and is not a Claude product. The plugin id, tool window and
+  notification groups keep their existing identifiers, so installed settings and saved layout
+  are untouched.
+- The icon is the [Claude AI symbol](https://commons.wikimedia.org/wiki/File:Claude_AI_symbol.svg)
+  from Wikimedia Commons, released under CC0 1.0.
+- Licensed [MIT](LICENSE), and the README and plugin description state plainly that this is
+  unofficial and unaffiliated with Anthropic.
+
 ### Known limitations
 
 - An editor terminal tab does not survive an IDE restart; sessions stay resumable from the

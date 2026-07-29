@@ -48,11 +48,17 @@ kotlin {
 
 intellijPlatform {
     pluginConfiguration {
+        // The plugin id is a technical identifier and is deliberately left alone: changing it
+        // makes the IDE treat this as a different plugin and abandons the user's settings.
         id = "dev.andy.claudesessions"
-        name = "Claude Sessions"
+        // Descriptive rather than possessive — the plugin works with Claude Code, it is not
+        // a Claude product. These win over the same tags in plugin.xml, which patchPluginXml
+        // rewrites at build time; the two are kept in step so either can be read.
+        name = "Sessions for Claude Code"
         version = providers.gradleProperty("pluginVersion").get()
         vendor {
-            name = "andy"
+            name = "karaushu"
+            url = "https://github.com/karaushu/JetBrains-Claude-Sessions-Plugin"
         }
         ideaVersion {
             sinceBuild = "262"

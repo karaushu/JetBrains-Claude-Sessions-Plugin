@@ -1,7 +1,10 @@
-# Claude Sessions
+# Sessions for Claude Code
 
 A WebStorm tool window that lists Claude Code sessions, shows which ones are running or
 waiting for input, and opens any of them as an editor tab.
+
+> **Unofficial.** Not affiliated with, endorsed by, or sponsored by Anthropic. Claude and
+> Claude Code are trademarks of Anthropic, PBC.
 
 - Sessions for the current project, or all projects grouped under collapsible project
   headings. A session run in a git worktree is listed under the project it was started
@@ -222,3 +225,13 @@ data/SessionPlaceholders.kt     rows for live sessions with no transcript yet
   banner itself only appears from an installed WebStorm.
 - A session running in a worktree outside its project matches no open project, so its
   notification arrives without the *Open Session* action.
+
+## Licence
+
+[MIT](LICENSE).
+
+The plugin icon is the [Claude AI symbol](https://commons.wikimedia.org/wiki/File:Claude_AI_symbol.svg)
+from Wikimedia Commons, released under
+[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) — public domain, no attribution
+required. It is reproduced here to identify what the plugin works with, not to suggest that
+Anthropic produced or endorsed it.
