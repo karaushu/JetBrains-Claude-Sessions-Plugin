@@ -1,0 +1,9 @@
+{
+  "icons": {
+    "expui": {
+      "claudeSessions.svg": "icons/claudeSessions.svg",
+      "session.svg": "icons/session.svg",
+      "sessionLive.svg": "icons/sessionLive.svg"
+    }
+  }
+}

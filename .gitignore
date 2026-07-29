@@ -1,0 +1,10 @@
+.gradle/
+build/
+out/
+.idea/
+.kotlin/
+*.iml
+.DS_Store
+
+# IntelliJ Platform Gradle Plugin sandbox: an entire IDE config, logs and indexes.
+.intellijPlatform/

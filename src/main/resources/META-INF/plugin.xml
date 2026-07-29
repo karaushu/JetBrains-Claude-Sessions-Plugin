@@ -1,0 +1,104 @@
+<idea-plugin>
+    <id>dev.andy.claudesessions</id>
+    <name>Claude Sessions</name>
+    <vendor>andy</vendor>
+
+    <description><![CDATA[
+        Browse Claude Code sessions for the current project from a tool window.
+        Shows which sessions are running, which are waiting for your input, and
+        resumes any of them in a terminal tab with a single click.
+    ]]></description>
+
+    <!-- JavaScript is not recognised as a module, so WebStorm plugins must state this explicitly. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!--
+      The reworked Terminal API (TerminalToolWindowTabsManager) lives in the
+      intellij.terminal.frontend content module, which has its own classloader.
+      Depending on the terminal plugin alone is not enough.
+    -->
+    <dependencies>
+        <plugin id="org.jetbrains.plugins.terminal"/>
+        <module name="intellij.terminal.frontend"/>
+    </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Claude Sessions"
+                    anchor="left"
+                    canCloseContents="false"
+                    factoryClass="dev.andy.claudesessions.ui.ClaudeSessionsToolWindowFactory"
+                    icon="dev.andy.claudesessions.ClaudeSessionsIcons.ToolWindow"/>
+
+        <iconMapper mappingFile="ClaudeSessionsIconMappings.json"/>
+
+        <notificationGroup id="Claude Sessions" displayType="BALLOON"/>
+
+        <!--
+          Separate from the group above so turn-end balloons can be turned down without
+          also silencing an archive's Undo. The OS notification is posted independently
+          and is gated by the platform on the IDE not being the active application.
+        -->
+        <notificationGroup id="Claude Session Status" displayType="BALLOON"/>
+
+        <!-- Starts watching hook events without waiting for the tool window to be opened. -->
+        <postStartupActivity
+            implementation="dev.andy.claudesessions.notify.SessionNotifierStartup"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            id="dev.andy.claudesessions.settings"
+            displayName="Claude Sessions"
+            instance="dev.andy.claudesessions.settings.ClaudeSessionsConfigurable"/>
+
+        <!-- Hosts a session's terminal as a tab in the main editor area. -->
+        <fileEditorProvider
+            implementation="dev.andy.claudesessions.terminal.ClaudeTerminalFileEditorProvider"/>
+        <!-- Keeps the editor tab limit from silently evicting a live session. -->
+        <editorAutoClosingHandler
+            implementation="dev.andy.claudesessions.terminal.ClaudeTerminalAutoClosingHandler"/>
+    </extensions>
+
+    <actions>
+        <group id="ClaudeSessions.Toolbar">
+            <action id="ClaudeSessions.NewSession"
+                    class="dev.andy.claudesessions.actions.NewSessionAction"
+                    text="New Claude Session"
+                    description="Start a new Claude Code session in an editor tab"
+                    icon="AllIcons.General.Add"/>
+            <action id="ClaudeSessions.Refresh"
+                    class="dev.andy.claudesessions.actions.RefreshSessionsAction"
+                    text="Refresh"
+                    description="Re-scan Claude Code session transcripts"
+                    icon="AllIcons.Actions.Refresh"/>
+            <action id="ClaudeSessions.ToggleScope"
+                    class="dev.andy.claudesessions.actions.ToggleScopeAction"
+                    text="Show Sessions from All Projects"
+                    description="Include sessions whose working directory is outside this project"
+                    icon="AllIcons.Actions.ShowAsTree"/>
+            <separator/>
+            <action id="ClaudeSessions.UsageLimits"
+                    class="dev.andy.claudesessions.actions.UsageLimitsAction"
+                    text="Usage Limits"
+                    description="Claude usage limits, read from Claude's own cache"/>
+        </group>
+
+        <!-- Rendered as a separate toolbar pinned to the right edge; see ClaudeSessionsPanel. -->
+        <group id="ClaudeSessions.Toolbar.Right">
+            <action id="ClaudeSessions.OpenSettings"
+                    class="dev.andy.claudesessions.actions.OpenSettingsAction"
+                    text="Claude Sessions Settings"
+                    description="Background usage fetching and session status"
+                    icon="AllIcons.General.Settings"/>
+        </group>
+
+        <!--
+          Deliberately not on the toolbar: this is one-time setup, not something to reach for.
+          Registered so it stays available from Find Action (Cmd+Shift+A).
+        -->
+        <action id="ClaudeSessions.ToggleHooks"
+                class="dev.andy.claudesessions.actions.ToggleHooksAction"
+                text="Claude Status Hooks"
+                description="Report session status for every Claude entrypoint, not just terminal sessions"
+                icon="AllIcons.General.Settings"/>
+    </actions>
+</idea-plugin>
