@@ -3,6 +3,19 @@
 Notable changes to Claude Sessions. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.1 — 2026-07-29
+
+### Changed
+
+- The plugin is named **Sessions for Claude Code** — descriptive rather than possessive, since
+  it works with Claude Code and is not a Claude product. The plugin id, tool window and
+  notification groups keep their existing identifiers, so installed settings and saved layout
+  are untouched.
+- The icon is the [Claude AI symbol](https://commons.wikimedia.org/wiki/File:Claude_AI_symbol.svg)
+  from Wikimedia Commons, released under CC0 1.0.
+- Licensed [MIT](LICENSE), and the README and plugin description state plainly that this is
+  unofficial and unaffiliated with Anthropic.
+
 ## 1.0.0 — 2026-07-29
 
 First release. Nothing was published before this, so there is no upgrade path to describe.
@@ -58,17 +71,6 @@ oversights:
 - **The row-actions button** is reachable across the whole row, and no longer paints over the
   editor.
 - No horizontal scrollbar in the session list.
-
-### Changed after release
-
-- The plugin is named **Sessions for Claude Code** — descriptive rather than possessive, since
-  it works with Claude Code and is not a Claude product. The plugin id, tool window and
-  notification groups keep their existing identifiers, so installed settings and saved layout
-  are untouched.
-- The icon is the [Claude AI symbol](https://commons.wikimedia.org/wiki/File:Claude_AI_symbol.svg)
-  from Wikimedia Commons, released under CC0 1.0.
-- Licensed [MIT](LICENSE), and the README and plugin description state plainly that this is
-  unofficial and unaffiliated with Anthropic.
 
 ### Known limitations
 
