@@ -3,6 +3,27 @@
 Notable changes to Claude Sessions. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.1.0 — 2026-08-12
+
+### Added
+
+- **Review notes in the diff viewer.** Hover a line in a side-by-side diff and a `+` appears
+  beside the line number; clicking it opens a box to write what needs fixing. Notes accumulate
+  across lines and files, and a button at the top of the diff sends the whole set in one go: the
+  label sends to the session it names, the arrow beside it picks another session or clears every
+  note. Sending refuses outright while the target session is waiting on a permission prompt — a
+  review typed into a prompt cannot be recalled — and asks first when it is mid-turn.
+- **Replies under the line.** The round is written to
+  `~/.claude/claudesessions/reviews/<project>/`, outside the project so it never appears in the
+  commit being reviewed, and the agent is asked to append one line per note to a replies file.
+  Each answer appears under the note it belongs to; `×` closes the note, and writing on it again
+  reopens it and sends it in the next round with its whole history. A note the agent never
+  answered stays visibly unanswered rather than being marked as done.
+- Notes follow their code: the text of the line is stored with the note, so an agent editing the
+  file moves the note rather than stranding it. A line that really has gone says so.
+- Notes are kept in `.idea/workspace.xml`, so they survive closing the diff and restarting the
+  IDE.
+
 ## 1.0.2 — 2026-07-29
 
 ### Fixed
