@@ -66,6 +66,9 @@
         <postStartupActivity
             implementation="dev.andy.claudesessions.notify.SessionNotifierStartup"/>
 
+        <!-- Watches for the agent's answers to review notes, diff open or not. -->
+        <postStartupActivity implementation="dev.andy.claudesessions.review.ReviewStartup"/>
+
         <applicationConfigurable
             parentId="tools"
             id="dev.andy.claudesessions.settings"
@@ -78,7 +81,19 @@
         <!-- Keeps the editor tab limit from silently evicting a live session. -->
         <editorAutoClosingHandler
             implementation="dev.andy.claudesessions.terminal.ClaudeTerminalAutoClosingHandler"/>
+
+        <!-- Adds the review gutter to every text diff viewer. Dynamic, so no restart to install. -->
+        <diff.DiffExtension implementation="dev.andy.claudesessions.review.ReviewDiffExtension"/>
     </extensions>
+
+    <!--
+      The only listener the plugin registers. Declared here rather than subscribed from a
+      service constructor so the platform instantiates it lazily, on the first selection change.
+    -->
+    <projectListeners>
+        <listener class="dev.andy.claudesessions.terminal.ClaudeTabFocusTracker"
+                  topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+    </projectListeners>
 
     <actions>
         <group id="ClaudeSessions.Toolbar">
@@ -98,6 +113,27 @@
                     description="Include sessions whose working directory is outside this project"
                     icon="AllIcons.Actions.ShowAsTree"/>
             <separator/>
+            <!--
+              Also placed on the diff toolbar by ReviewDiffExtension. Here as well, because a
+              narrow diff pane folds it into the overflow menu, and because the user may have
+              closed the diff while notes are still waiting to go.
+            -->
+            <!--
+              Two buttons that read as one split button: the label sends, the arrow retargets.
+              The icon and the text here are not decoration — a text-only button is created
+              before the first update() has anything to measure, and a zero-width button never
+              grows back.
+            -->
+            <action id="ClaudeSessions.SendReviewNotes"
+                    class="dev.andy.claudesessions.review.SendReviewNotesAction"
+                    text="Send Review Notes to Claude"
+                    description="Send the notes written in diff gutters to a Claude Code session"
+                    icon="dev.andy.claudesessions.ClaudeSessionsIcons.SessionLive"/>
+            <action id="ClaudeSessions.PickReviewTarget"
+                    class="dev.andy.claudesessions.review.PickReviewTargetAction"
+                    text="Send Review Notes To…"
+                    description="Choose which Claude session the notes go to"
+                    icon="AllIcons.General.ChevronDown"/>
             <action id="ClaudeSessions.UsageLimits"
                     class="dev.andy.claudesessions.actions.UsageLimitsAction"
                     text="Usage Limits"

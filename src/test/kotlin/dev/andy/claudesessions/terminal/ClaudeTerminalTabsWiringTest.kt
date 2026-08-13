@@ -144,4 +144,53 @@ class ClaudeTerminalTabsWiringTest {
         assertEquals("session-a", first.sessionId)
         assertEquals("new:2", second.sessionId, "the unadopted tab keeps its synthetic key")
     }
+
+    @Test
+    fun `the focus order puts the session looked at last in front`() {
+        val tabs = ClaudeTerminalTabs()
+        tabs.remember(ClaudeTerminalFile("a", fakeView(), null))
+        tabs.remember(ClaudeTerminalFile("b", fakeView(), null))
+
+        tabs.noteFocused("a")
+        tabs.noteFocused("b")
+        tabs.noteFocused("a")
+
+        assertEquals(listOf("a", "b"), tabs.focusedSessionIds(), "and never duplicates an id")
+    }
+
+    @Test
+    fun `a session whose tab closed drops out of the focus order`() {
+        val tabs = ClaudeTerminalTabs()
+        tabs.remember(ClaudeTerminalFile("a", fakeView(), null))
+        tabs.noteFocused("a")
+
+        tabs.forget("a")
+
+        assertTrue(tabs.focusedSessionIds().isEmpty())
+    }
+
+    @Test
+    fun `a session never focused is not offered as one that was`() {
+        val tabs = ClaudeTerminalTabs()
+        tabs.remember(ClaudeTerminalFile("a", fakeView(), null))
+
+        assertTrue(tabs.focusedSessionIds().isEmpty())
+    }
+
+    @Test
+    fun `adoption carries the plus tab's place in the focus order to its real id`() {
+        val tabs = ClaudeTerminalTabs()
+        val other = ClaudeTerminalFile("older", fakeView(), null)
+        val file = newSessionFile()
+        tabs.remember(other)
+        tabs.remember(file)
+        tabs.awaitLink(file, "/repo", 1_000L)
+        tabs.noteFocused("older")
+        // A '+' tab is focused before Claude has given it an id.
+        tabs.noteFocused("new:abc")
+
+        tabs.resolveLink(tabs.pendingLinks().single(), "real-session-id")
+
+        assertEquals(listOf("real-session-id", "older"), tabs.focusedSessionIds())
+    }
 }

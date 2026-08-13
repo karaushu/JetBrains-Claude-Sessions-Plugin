@@ -20,6 +20,12 @@ waiting for input, and opens any of them as an editor tab.
 - **System notifications** when a turn ends or Claude needs input, each switchable on its
   own. macOS shows them only while the IDE is not the active application; inside the IDE
   they arrive as balloons.
+- **Review notes in the diff viewer.** Hover a line in a side-by-side diff and a `+` appears
+  beside the line number. Write what needs fixing, add as many notes across as many files as you
+  like, then send the whole set to a session with one button — which always names the session it
+  is about to send to. The agent answers each note under the line it belongs to; `×` closes a
+  note, writing on it again reopens it and sends it back with its history. A note the agent never
+  answered says so rather than pretending to be done.
 - **Usage limits** in the toolbar: the 5-hour percentage, with a dropdown showing every
   window (5-hour, weekly all-models, weekly per-model).
 - **Settings** under *Settings → Tools → Claude Sessions*, or the gear in the tool window:
@@ -199,6 +205,13 @@ hooks/SessionTitles.kt          what Claude calls each session, as the hooks men
 notify/SessionNotice.kt         which events are worth announcing, and what they say
 notify/SessionNotifier.kt       posts the OS notification and the IDE balloon
 hooks/                          push status for every entrypoint, not just terminals
+review/ReviewDiffExtension.kt   attaches the gutter and the send button to a diff viewer
+review/ReviewEditorSession.kt   what the review draws in one editor, and its rediff handling
+review/ReviewStore.kt           the notes, in workspace.xml; the one source of truth
+review/ReviewAnchoring.kt       follows a note to where its line ended up
+review/ReviewFile.kt            the markdown a round hands to the agent, including how to reply
+review/ReviewSender.kt          writes the round, gates on session state, types the prompt
+review/ReviewReplyWatcher.kt    reads the replies file and decides when a round is over
 usage/                          usage limits: read, refresh, format, render
 settings/                       persisted settings and the Settings page
 data/SessionArchiver.kt         move a session out of history, reversibly

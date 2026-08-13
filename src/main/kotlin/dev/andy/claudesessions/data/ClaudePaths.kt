@@ -21,6 +21,15 @@ internal object ClaudePaths {
     val hookEventLog: Path get() = pluginDir.resolve("events.jsonl")
 
     /**
+     * Where a review round's markdown and the agent's replies to it live.
+     *
+     * Deliberately outside the project: a file under the project root would show up as
+     * untracked in the very commit the user is reviewing, and writing a `.gitignore` entry on
+     * their behalf to hide it is not a change this plugin should make.
+     */
+    val reviews: Path get() = pluginDir.resolve("reviews")
+
+    /**
      * Claude Code derives a project directory name by replacing every non-alphanumeric
      * character of the absolute cwd with `-`, so `/Users/a/.x/y` becomes `-Users-a--x-y`.
      *

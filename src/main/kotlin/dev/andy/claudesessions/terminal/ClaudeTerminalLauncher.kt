@@ -182,6 +182,25 @@ internal object ClaudeTerminalLauncher {
     }
 
     /**
+     * Types a line into a session that is already running, as if the user had pasted it.
+     *
+     * Used by the diff review to hand a round to an agent. Returns false when the session has
+     * no open tab, which is the only failure the caller can do anything about: there is no
+     * delivery callback to wait for, because `sendText` buffers until the shell is ready.
+     */
+    @RequiresEdt
+    fun sendToSession(project: Project, sessionId: String, text: String): Boolean {
+        val file = project.service<ClaudeTerminalTabs>().find(sessionId) ?: return false
+        return runCatching {
+            file.view.createSendTextBuilder()
+                .shouldExecute()
+                .useBracketedPasteMode()
+                .send(text)
+        }.onFailure { thisLogger().warn("Could not send text to session $sessionId", it) }
+            .isSuccess
+    }
+
+    /**
      * Binds tabs opened with `+` to the session Claude actually created; see
      * [SessionAdoption] for how the match is made.
      */

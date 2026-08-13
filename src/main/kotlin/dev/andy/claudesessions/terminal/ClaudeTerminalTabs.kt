@@ -28,6 +28,13 @@ internal class ClaudeTerminalTabs {
     private val bySessionId = ConcurrentHashMap<String, ClaudeTerminalFile>()
     private val pending = CopyOnWriteArrayList<PendingLink>()
 
+    /**
+     * Most recently focused first, so a feature that has to pick a session on the user's
+     * behalf — sending diff review notes, for one — can default to the one they were last
+     * looking at. Fed by [ClaudeTabFocusTracker]; ids of closed tabs are dropped.
+     */
+    private val focusOrder = CopyOnWriteArrayList<String>()
+
     fun find(sessionId: String): ClaudeTerminalFile? = bySessionId[sessionId]
 
     fun remember(file: ClaudeTerminalFile) {
@@ -37,7 +44,17 @@ internal class ClaudeTerminalTabs {
     fun forget(sessionId: String) {
         bySessionId.remove(sessionId)
         pending.removeIf { it.file.sessionId == sessionId }
+        focusOrder.remove(sessionId)
     }
+
+    fun noteFocused(sessionId: String) {
+        focusOrder.remove(sessionId)
+        focusOrder.add(0, sessionId)
+        while (focusOrder.size > MAX_FOCUS_HISTORY) focusOrder.removeAt(focusOrder.size - 1)
+    }
+
+    /** Only sessions whose tab is still open; a remembered id outlives nothing. */
+    fun focusedSessionIds(): List<String> = focusOrder.filter { bySessionId.containsKey(it) }
 
     fun openSessionIds(): Set<String> = bySessionId.keys.toSet()
 
@@ -49,10 +66,18 @@ internal class ClaudeTerminalTabs {
 
     /** Rebinds the tab from its synthetic key to the session id Claude assigned. */
     fun resolveLink(link: PendingLink, realSessionId: String) {
+        val syntheticKey = link.file.sessionId
         pending.remove(link)
-        bySessionId.remove(link.file.sessionId)
+        bySessionId.remove(syntheticKey)
         link.file.bindSessionId(realSessionId)
         bySessionId[realSessionId] = link.file
+        // A '+' tab is focused before Claude has given it an id, so its place in the focus
+        // order was recorded under the synthetic key and has to move with it.
+        val focusedAt = focusOrder.indexOf(syntheticKey)
+        if (focusedAt >= 0) {
+            focusOrder.removeAt(focusedAt)
+            focusOrder.add(focusedAt, realSessionId)
+        }
     }
 
     /**
@@ -67,5 +92,7 @@ internal class ClaudeTerminalTabs {
 
     companion object {
         private const val LINK_TIMEOUT_MILLIS = 3 * 60 * 1000L
+
+        private const val MAX_FOCUS_HISTORY = 16
     }
 }

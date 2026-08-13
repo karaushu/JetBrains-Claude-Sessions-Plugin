@@ -38,4 +38,47 @@ class UiTextTest {
         // Model-generated titles are untrusted; they must never become markup.
         assertEquals("<html><b>bold</b> title", UiText.oneLine("<html><b>bold</b> title"))
     }
+
+    @Test
+    fun `multiLine keeps the paragraph breaks a reply needs`() {
+        assertEquals("first line\n\nsecond line", UiText.multiLine("first line\n\nsecond line"))
+    }
+
+    @Test
+    fun `multiLine collapses a gap the model left behind`() {
+        assertEquals("a\n\nb", UiText.multiLine("a\n\n\n\n\nb"))
+    }
+
+    @Test
+    fun `multiLine normalises windows line endings`() {
+        assertEquals("a\nb", UiText.multiLine("a\r\nb"))
+    }
+
+    @Test
+    fun `multiLine strips control characters without eating the line breaks`() {
+        val bell = 7.toChar()
+        assertEquals("ab\ncd", UiText.multiLine("a" + bell + "b\ncd"))
+    }
+
+    @Test
+    fun `multiLine caps the number of lines and says it did`() {
+        val result = UiText.multiLine((1..100).joinToString("\n"), maxLines = 5)
+
+        assertEquals(6, result.lines().size)
+        assertTrue(result.endsWith("…"))
+    }
+
+    @Test
+    fun `multiLine caps the length`() {
+        val result = UiText.multiLine("x".repeat(500), maxChars = 20)
+
+        assertEquals(20, result.length)
+        assertTrue(result.endsWith("…"))
+    }
+
+    @Test
+    fun `multiLine handles blank input`() {
+        assertEquals("", UiText.multiLine(null))
+        assertEquals("", UiText.multiLine("  \n\n  "))
+    }
 }
