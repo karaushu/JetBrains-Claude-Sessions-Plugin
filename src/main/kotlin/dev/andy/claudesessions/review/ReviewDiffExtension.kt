@@ -4,6 +4,7 @@ import com.intellij.diff.DiffContext
 import com.intellij.diff.DiffExtension
 import com.intellij.diff.FrameDiffTool
 import com.intellij.diff.requests.DiffRequest
+import com.intellij.diff.tools.fragmented.UnifiedDiffViewer
 import com.intellij.diff.tools.simple.SimpleOnesideDiffViewer
 import com.intellij.diff.tools.util.base.DiffViewerBase
 import com.intellij.diff.tools.util.base.DiffViewerListener
@@ -14,6 +15,7 @@ import com.intellij.diff.util.Side
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.util.Disposer
@@ -41,8 +43,9 @@ internal class ReviewDiffExtension : DiffExtension() {
 
         val project = context.project ?: return
         val base = viewer as? DiffViewerBase ?: return
-        val editor = afterSideEditor(viewer) ?: return refuse(viewer, "no editable after side")
-        val path = commentablePath(project, editor) ?: return refuse(viewer, "not a project file")
+        val target = afterSide(viewer) ?: return refuse(viewer, "no editable after side")
+        val editor = target.editor
+        val path = commentablePath(project, target) ?: return refuse(viewer, "not a project file")
 
         // One line per diff opened. Worth the noise: "there is no + in my diff" is otherwise
         // impossible to diagnose from a report, and every reason to bail out is silent by design.
@@ -54,7 +57,7 @@ internal class ReviewDiffExtension : DiffExtension() {
         if (editor.getUserData(SESSION_INSTALLED) == true) return
         editor.putUserData(SESSION_INSTALLED, true)
 
-        val session = ReviewEditorSession(project, editor, path)
+        val session = ReviewEditorSession(project, editor, path, target.lines)
         Disposer.register(base, session)
         Disposer.register(session) { editor.putUserData(SESSION_INSTALLED, null) }
         session.start()
@@ -72,20 +75,37 @@ internal class ReviewDiffExtension : DiffExtension() {
     }
 
     /**
-     * The editor showing the file as it is now.
-     *
-     * Unified is left out on purpose: its editor holds a synthetic document whose lines are not
-     * the file's, and the helpers for mapping between them are marked internal API. The button
-     * still works there, so a round is never trapped — the user flips to side by side to add a
-     * note.
+     * What the review needs from a viewer: an editor to draw in, the file's own document, and the
+     * conversion between the two line numberings.
      */
-    private fun afterSideEditor(viewer: FrameDiffTool.DiffViewer): EditorEx? = when (viewer) {
-        is TwosideTextDiffViewer -> viewer.getEditor(Side.RIGHT)
+    private class AfterSide(val editor: EditorEx, val document: Document, val lines: ReviewLines)
+
+    /**
+     * The after side of whichever viewer this is.
+     *
+     * Unified is included by going through the viewer's own strict line conversions. Its editor
+     * holds a synthetic document interleaving both sides, so nothing here may assume the editor's
+     * lines are the file's — that is what [ReviewLines] is for. The internal-API members of the
+     * unified viewer are untouched; only the published `transferLine*Strict` calls are used.
+     */
+    private fun afterSide(viewer: FrameDiffTool.DiffViewer): AfterSide? = when (viewer) {
+        is TwosideTextDiffViewer -> viewer.getEditor(Side.RIGHT).let { plain(it) }
+
         // A one-side viewer is an added or deleted file; only an added one has code to fix.
-        is SimpleOnesideDiffViewer -> viewer.editor.takeIf { viewer.side == Side.RIGHT }
-        is OnesideTextDiffViewer -> viewer.editor.takeIf { viewer.side == Side.RIGHT }
+        is SimpleOnesideDiffViewer -> viewer.editor.takeIf { viewer.side == Side.RIGHT }?.let { plain(it) }
+        is OnesideTextDiffViewer -> viewer.editor.takeIf { viewer.side == Side.RIGHT }?.let { plain(it) }
+
+        is UnifiedDiffViewer -> AfterSide(
+            editor = viewer.editor,
+            document = viewer.getDocument(Side.RIGHT),
+            lines = UnifiedLines(viewer),
+        ).takeIf { viewer.isEditable(Side.RIGHT, false) }
+
         else -> null
     }
+
+    private fun plain(editor: EditorEx): AfterSide? =
+        if (editor.isViewer) null else AfterSide(editor, editor.document, PlainLines(editor))
 
     /**
      * The project-relative path of the file this editor edits, or null when there is nothing to
@@ -98,10 +118,10 @@ internal class ReviewDiffExtension : DiffExtension() {
      */
     private fun commentablePath(
         project: com.intellij.openapi.project.Project,
-        editor: EditorEx,
+        target: AfterSide,
     ): String? {
-        if (editor.isViewer || !editor.document.isWritable) return null
-        val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return null
+        if (!target.document.isWritable) return null
+        val file = FileDocumentManager.getInstance().getFile(target.document) ?: return null
         if (!file.isInLocalFileSystem) return null
         val basePath = project.basePath ?: return null
         return ReviewPaths.relativise(basePath, file.path)
