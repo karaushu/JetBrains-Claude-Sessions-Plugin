@@ -3,6 +3,15 @@
 Notable changes to Claude Sessions. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Review notes now work in a **unified diff** as well as side by side. A unified viewer numbers
+  its own interleaved document rather than the file, so notes are held in file lines and converted
+  for drawing through the viewer's own strict line mapping. A hovered deletion offers no `+`: that
+  line exists only in the before side, and there is nothing in the file for a note to hold on to.
+
 ## 1.1.0 — 2026-08-12
 
 ### Added

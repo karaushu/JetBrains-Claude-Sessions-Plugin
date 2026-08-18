@@ -36,6 +36,11 @@ internal class ReviewEditorSession(
     private val project: Project,
     private val editor: EditorEx,
     private val path: String,
+    /**
+     * The two numberings this session juggles. Notes are held in file lines; panels and gutter
+     * icons are placed in the editor's own lines, which a unified diff numbers differently.
+     */
+    private val lines: ReviewLines,
 ) : Disposable {
 
     private val store get() = project.service<ReviewStore>()
@@ -53,13 +58,16 @@ internal class ReviewEditorSession(
      */
     private val rendered = HashMap<String, ReviewThread>()
 
+    /** The editor line each panel was placed on, so a move can be told from a redraw. */
     private val threadLines = HashMap<String, Int>()
 
+    /** Keyed by file line, like the drafts themselves: the editor line under it can change. */
     private val draftInlays = HashMap<Int, Inlay<*>>()
 
     /** At most one, on the line under the pointer. */
     private var plusHighlighter: RangeHighlighter? = null
 
+    /** The editor line the `+` sits on, not the file line it points at. */
     private var plusLine: Int = -1
 
     private var collector: Job? = null
@@ -91,7 +99,13 @@ internal class ReviewEditorSession(
             if (id !in current) removeThreadInlay(id)
         }
         for (thread in current.values) {
-            val line = thread.anchor.line.coerceAtMost(editor.document.lineCount - 1)
+            // A note whose line this view does not show — a unified diff hides nothing, but a
+            // one-side view of the other side would — is simply not drawn here.
+            val line = lines.toDocumentLine(thread.anchor.line)
+            if (line == null) {
+                removeThreadInlay(thread.id)
+                continue
+            }
             val unchanged = rendered[thread.id] == thread &&
                 threadLines[thread.id] == line &&
                 threadInlays[thread.id]?.isValid == true
@@ -103,14 +117,15 @@ internal class ReviewEditorSession(
             addThreadInlay(thread, line)
         }
 
-        for (line in draftInlays.keys.toList()) {
-            if (drafts.get(path, line) == null || current.values.any { it.anchor.line == line }) {
-                removeDraftInlay(line)
-            }
+        for (fileLine in draftInlays.keys.toList()) {
+            val gone = drafts.get(path, fileLine) == null ||
+                current.values.any { it.anchor.line == fileLine } ||
+                lines.toDocumentLine(fileLine) == null
+            if (gone) removeDraftInlay(fileLine)
         }
-        drafts.linesIn(path).forEach { line ->
-            if (line !in draftInlays && current.values.none { it.anchor.line == line }) {
-                openDraft(line, focus = false)
+        drafts.linesIn(path).forEach { fileLine ->
+            if (fileLine !in draftInlays && current.values.none { it.anchor.line == fileLine }) {
+                openDraft(fileLine, focus = false)
             }
         }
     }
@@ -123,26 +138,26 @@ internal class ReviewEditorSession(
      */
     private fun reanchor(threads: List<ReviewThread>) {
         if (threads.isEmpty()) return
-        val lines = editor.document.charsSequence.toString().split('\n')
-        store.reanchor(ReviewAnchoring.anchorAll(lines, threads))
+        store.reanchor(ReviewAnchoring.anchorAll(lines.fileLines(), threads))
     }
 
-    /** Opens the box for a new note on [line], or focuses the one already there. */
-    fun openDraft(line: Int, focus: Boolean = true) {
-        if (editor.isDisposed || line < 0 || line >= editor.document.lineCount) return
+    /** Opens the box for a new note on the given file line, or leaves the one already there. */
+    fun openDraft(fileLine: Int, focus: Boolean = true) {
+        if (editor.isDisposed) return
+        val documentLine = lines.toDocumentLine(fileLine) ?: return
 
-        val existing = store.threadsFor(path).firstOrNull { it.anchor.line == line }
+        val existing = store.threadsFor(path).firstOrNull { it.anchor.line == fileLine }
         if (existing != null) return
 
-        draftInlays[line]?.let { inlay ->
+        draftInlays[fileLine]?.let { inlay ->
             if (inlay.isValid) return
-            removeDraftInlay(line)
+            removeDraftInlay(fileLine)
         }
         clearPlus()
 
-        val panel = draftPanel(line)
-        val inlay = ReviewInlays.addBelow(editor, line, panel) ?: return
-        draftInlays[line] = inlay
+        val panel = draftPanel(fileLine)
+        val inlay = ReviewInlays.addBelow(editor, documentLine, panel) ?: return
+        draftInlays[fileLine] = inlay
         if (focus) panel.focusText()
     }
 
@@ -197,10 +212,15 @@ internal class ReviewEditorSession(
         rendered[thread.id] = thread
     }
 
-    /** The code around a line, captured now so the review file needs no read action later. */
+    /**
+     * The code around a file line, captured now so the review file needs no read action later.
+     *
+     * Read from the file's own document rather than the editor's: in a unified diff the editor
+     * interleaves both sides, and a hunk quoted from it would show the reviewer's own deletions
+     * back to the agent as though they were still there.
+     */
     private fun anchorAt(line: Int): ReviewAnchor {
-        val document = editor.document
-        val text = document.charsSequence.toString().split('\n')
+        val text = lines.fileLines()
         val from = (line - CONTEXT_LINES).coerceAtLeast(0)
         val to = (line + CONTEXT_LINES).coerceAtMost(text.lastIndex)
         return ReviewAnchor(
@@ -256,26 +276,40 @@ internal class ReviewEditorSession(
         )
     }
 
+    /**
+     * Puts the `+` on the hovered editor line, if that line is one a note can belong to.
+     *
+     * In a unified diff a hovered line may be a deletion, which exists only in the before side and
+     * has no file line to anchor a note to. [ReviewLines.toFileLine] is what says so, and the icon
+     * is then not offered at all rather than offered and refused on click.
+     */
     private fun showPlus(hoveredLine: Int) {
-        val wanted = ReviewGutterHover.plusLine(hoveredLine, editor.document.lineCount, occupiedLines())
+        val fileLine = lines.toFileLine(hoveredLine)
+        val wanted = if (fileLine == null) null else {
+            ReviewGutterHover.plusLine(hoveredLine, lines.documentLineCount, occupiedDocumentLines())
+        }
         // Nothing to do is the common case on a fast sweep, and doing nothing is what keeps it
         // from churning a highlighter per line crossed.
         if (wanted == plusLine) return
 
         clearPlus()
-        if (wanted == null) return
+        if (wanted == null || fileLine == null) return
 
         // Above the diff's own background ranges, without touching them. No text attributes:
         // the only thing painted is the gutter icon.
         val highlighter = editor.markupModel
             .addLineHighlighter(null, wanted, HighlighterLayer.LAST + 1)
-        highlighter.gutterIconRenderer = ReviewGutterIcon(wanted) { openDraft(it) }
+        // The renderer carries the *file* line, because that is what a note is written against.
+        highlighter.gutterIconRenderer = ReviewGutterIcon(fileLine) { openDraft(it) }
         plusHighlighter = highlighter
         plusLine = wanted
     }
 
-    private fun occupiedLines(): Set<Int> =
-        draftInlays.keys + store.threadsFor(path).map { it.anchor.line }
+    /** Editor lines that already carry a box or a note, so the `+` is not offered twice. */
+    private fun occupiedDocumentLines(): Set<Int> {
+        val fileLines = draftInlays.keys + store.threadsFor(path).map { it.anchor.line }
+        return fileLines.mapNotNullTo(HashSet()) { lines.toDocumentLine(it) }
+    }
 
     private fun clearPlus() {
         plusHighlighter?.let { runCatching { editor.markupModel.removeHighlighter(it) } }
