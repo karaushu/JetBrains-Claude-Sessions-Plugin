@@ -5,6 +5,8 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import dev.andy.claudesessions.data.ClaudePaths
+import dev.andy.claudesessions.data.array
+import dev.andy.claudesessions.data.obj
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -140,10 +142,4 @@ internal object HookInstaller {
 
     private fun com.google.gson.JsonElement.containsMarker(): Boolean =
         toString().contains(MARKER)
-
-    // Gson's typed getters cast, so a `"hooks": null` in the user's settings would throw
-    // rather than be treated as absent. This code writes their config; it must not crash.
-    private fun JsonObject.obj(name: String): JsonObject? = get(name) as? JsonObject
-
-    private fun JsonObject.array(name: String): JsonArray? = get(name) as? JsonArray
 }

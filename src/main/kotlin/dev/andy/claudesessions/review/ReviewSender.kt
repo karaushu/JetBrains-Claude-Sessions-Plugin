@@ -7,7 +7,6 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import dev.andy.claudesessions.data.SessionStore
 import dev.andy.claudesessions.hooks.HookEventBus
-import dev.andy.claudesessions.model.SessionState
 import dev.andy.claudesessions.terminal.ClaudeTerminalLauncher
 import dev.andy.claudesessions.terminal.ClaudeTerminalTabs
 import kotlinx.coroutines.CoroutineScope
@@ -56,17 +55,15 @@ internal class ReviewSender(private val project: Project, private val scope: Cor
 
     /** What would happen if the user pressed Send now, without sending anything. */
     fun gate(sessionId: String? = resolveTarget()): SendGate {
-        val item = sessionId?.let { id ->
-            project.service<SessionStore>().items.value.firstOrNull { it.sessionId == id }
-        }
-        val hookState = sessionId?.let { service<HookEventBus>().states()[it] }
+        val sessions = project.service<SessionStore>()
+        val item = sessionId?.let { id -> sessions.items.value.firstOrNull { it.sessionId == id } }
         return ReviewGate.evaluate(
             sendableCount = store.sendableThreads().size,
             sessionId = sessionId,
             rawTitle = titleOf(sessionId),
             tabOpen = sessionId != null &&
                 project.service<ClaudeTerminalTabs>().find(sessionId) != null,
-            state = item?.state?.takeIf { it != SessionState.HISTORICAL } ?: hookState,
+            state = sessionId?.let(sessions::effectiveState),
             liveStatus = item?.live?.status,
         )
     }
@@ -88,7 +85,7 @@ internal class ReviewSender(private val project: Project, private val scope: Cor
 
     private suspend fun perform(sessionId: String, confirmed: Boolean): SendResult {
         val gate = gate(sessionId)
-        if (!gate.isReady && !(confirmed && gate.needsConfirmation && gate !is SendGate.TabClosed)) {
+        if (!gate.isReady && !(confirmed && gate.needsConfirmation)) {
             return SendResult.Refused(gate)
         }
 
@@ -108,7 +105,7 @@ internal class ReviewSender(private val project: Project, private val scope: Cor
         val repliesFile = ReviewPaths.repliesFile(basePath, round.id)
 
         val written = withContext(Dispatchers.IO) {
-            write(reviewFile, ReviewFile.render(threads, repliesFile))
+            write(reviewFile, ReviewFile.render(threads, repliesFile, basePath))
         }
         written?.let { return SendResult.Refused(SendGate.WriteFailed(it)) }
 
@@ -119,8 +116,19 @@ internal class ReviewSender(private val project: Project, private val scope: Cor
         ReviewPersistence.scheduleSave(project)
 
         val prompt = ReviewPrompt.forRound(reviewFile, threads.size)
-        val sent = withContext(Dispatchers.EDT) {
-            ClaudeTerminalLauncher.sendToSession(project, sessionId, prompt)
+        // A throw from the EDT hop must roll back too, or the threads stay SENT for a round
+        // the session never received.
+        val sent = try {
+            withContext(Dispatchers.EDT) {
+                ClaudeTerminalLauncher.sendToSession(project, sessionId, prompt)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            store.rollbackSend(threads.map { it.id }, round.id)
+            runCatching { Files.deleteIfExists(reviewFile) }
+            throw e
+        } catch (e: Throwable) {
+            thisLogger().warn("Review send crashed", e)
+            false
         }
         if (!sent) {
             store.rollbackSend(threads.map { it.id }, round.id)

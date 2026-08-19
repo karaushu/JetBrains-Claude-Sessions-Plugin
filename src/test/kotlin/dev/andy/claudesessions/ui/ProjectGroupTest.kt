@@ -101,6 +101,21 @@ class ProjectGroupTest {
     }
 
     @Test
+    fun `live counts agree with group on every heading, including the null-cwd one`() {
+        val items = listOf(
+            session("a", null, 1, live = true),
+            session("b", "/repo/one", 2, live = true),
+            session("c", "/repo/one", 3),
+        )
+
+        val counts = ProjectGroup.liveCounts(items)
+        for ((group, _) in ProjectGroup.group(items, currentProjectPath = null)) {
+            assertEquals(group.liveCount, counts[group.path] ?: 0, "heading ${group.path}")
+        }
+        assertEquals(1, counts["Unknown location"])
+    }
+
+    @Test
     fun `heading shows the last path segment`() {
         val groups = ProjectGroup.group(
             listOf(session("a", "/Users/dev/projects/acme", 1)),

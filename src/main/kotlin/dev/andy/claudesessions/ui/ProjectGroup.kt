@@ -21,12 +21,19 @@ internal data class ProjectGroup(
     companion object {
         private const val UNKNOWN_PATH = "Unknown location"
 
+        /** The one keying rule: [group] and in-place count refreshes must agree on it. */
+        fun pathOf(item: SessionItem): String = item.summary.cwd ?: UNKNOWN_PATH
+
+        /** Live sessions per heading path, for refreshing counts without regrouping. */
+        fun liveCounts(items: List<SessionItem>): Map<String, Int> =
+            items.filter { it.isLive }.groupingBy(::pathOf).eachCount()
+
         /**
          * Groups sessions by working directory, current project first, then by most
          * recent activity. Session order within a group is preserved.
          */
         fun group(items: List<SessionItem>, currentProjectPath: String?): List<Pair<ProjectGroup, List<SessionItem>>> {
-            val byPath = items.groupBy { it.summary.cwd ?: UNKNOWN_PATH }
+            val byPath = items.groupBy(::pathOf)
 
             return byPath.entries
                 .map { (path, sessions) ->

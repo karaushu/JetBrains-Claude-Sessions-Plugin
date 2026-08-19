@@ -30,6 +30,9 @@ internal class ClaudeSessionsSettings : PersistentStateComponent<ClaudeSessionsS
 
         /** Announce a permission prompt, a plan approval, or any other blocking ask. */
         var notifyOnPrompt: Boolean = true
+
+        /** Announce only sessions this IDE started, not every Claude on the machine. */
+        var notifyOnlyIdeSessions: Boolean = true
     }
 
     private var state = State()
@@ -68,6 +71,19 @@ internal class ClaudeSessionsSettings : PersistentStateComponent<ClaudeSessionsS
         get() = state.notifyOnPrompt
         set(value) {
             state.notifyOnPrompt = value
+        }
+
+    /**
+     * Whether a notification needs a session running in one of this IDE's own tabs.
+     *
+     * The hook log is one file per machine, so without this the IDE announces turns from the
+     * Claude desktop app, from an external terminal and from every other window that happens
+     * to be running. On by default: those sessions are being watched somewhere else.
+     */
+    var notifyOnlyIdeSessions: Boolean
+        get() = state.notifyOnlyIdeSessions
+        set(value) {
+            state.notifyOnlyIdeSessions = value
         }
 
     /** Whether anything at all wants the hook stream watched. */

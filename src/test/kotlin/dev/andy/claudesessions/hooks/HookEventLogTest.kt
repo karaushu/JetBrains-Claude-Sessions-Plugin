@@ -6,7 +6,9 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import kotlin.io.path.appendText
 import kotlin.io.path.writeText
 
@@ -64,6 +66,47 @@ class HookEventLogTest {
         )
 
         assertEquals(listOf("a", "b"), HookEventLog(file).readNew().map { it.sessionId })
+    }
+
+    @Test
+    fun `a busy oversized log is not reset, so nothing appended mid-read is destroyed`(@TempDir dir: Path) {
+        val file = dir.resolve("events.jsonl")
+        val filler = line("filler", "Stop") + "\n"
+        file.writeText(filler.repeat(600 * 1024 / filler.length + 1))
+        val log = HookEventLog(file)
+
+        // The file was written just now, so it has not been quiet: the reset must wait.
+        assertTrue(log.readNew().isNotEmpty())
+        assertTrue(Files.size(file) > 0, "a busy log must not be truncated")
+
+        file.appendText(line("late", "Stop") + "\n")
+        assertEquals(listOf("late"), log.readNew().map { it.sessionId })
+    }
+
+    @Test
+    fun `a quiet oversized log is reset after being read`(@TempDir dir: Path) {
+        val file = dir.resolve("events.jsonl")
+        val filler = line("filler", "Stop") + "\n"
+        file.writeText(filler.repeat(600 * 1024 / filler.length + 1))
+        Files.setLastModifiedTime(file, FileTime.fromMillis(System.currentTimeMillis() - 60_000))
+        val log = HookEventLog(file)
+
+        assertTrue(log.readNew().isNotEmpty())
+        assertEquals(0, Files.size(file))
+
+        file.appendText(line("after", "Stop") + "\n")
+        assertEquals(listOf("after"), log.readNew().map { it.sessionId })
+    }
+
+    @Test
+    fun `a log far past the bound is reset even while busy`(@TempDir dir: Path) {
+        val file = dir.resolve("events.jsonl")
+        val filler = line("filler", "Stop") + "\n"
+        file.writeText(filler.repeat(5 * 1024 * 1024 / filler.length + 1))
+        val log = HookEventLog(file)
+
+        assertTrue(log.readNew().isNotEmpty())
+        assertEquals(0, Files.size(file), "the hard cap must actually cap")
     }
 
     @Test

@@ -4,12 +4,17 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.thisLogger
 import dev.andy.claudesessions.data.ClaudePaths
+import dev.andy.claudesessions.data.FileTail
+import dev.andy.claudesessions.data.boolean
+import dev.andy.claudesessions.data.string
+import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.exists
 import kotlin.io.path.fileSize
+import kotlin.io.path.getLastModifiedTime
 
 /**
  * Tails the append-only log our hooks write.
@@ -28,6 +33,9 @@ internal class HookEventLog(private val file: Path = ClaudePaths.hookEventLog) {
     /** Keeps the log from growing without bound; truncated only after being read. */
     private val maxBytes = 512 * 1024L
 
+    /** Past this, the quiet-period requirement is waived — the cap must actually cap. */
+    private val hardMaxBytes = 4 * 1024 * 1024L
+
     /**
      * Returns events appended since the last call. Empty when nothing changed, which is
      * the overwhelmingly common case.
@@ -44,7 +52,9 @@ internal class HookEventLog(private val file: Path = ClaudePaths.hookEventLog) {
         if (size < offset) offset = 0
         if (size == offset) return emptyList()
 
-        val text = runCatching { readFrom(offset, size) }
+        val text = runCatching {
+            String(FileTail.readBytes(file, offset, size), StandardCharsets.UTF_8)
+        }
             .onFailure { thisLogger().debug("Cannot read hook event log", it) }
             .getOrNull() ?: return emptyList()
 
@@ -55,17 +65,8 @@ internal class HookEventLog(private val file: Path = ClaudePaths.hookEventLog) {
             .mapNotNull(::parse)
             .toList()
 
-        if (size > maxBytes) truncate()
+        if (size > maxBytes) truncate(force = size > hardMaxBytes)
         return events
-    }
-
-    private fun readFrom(from: Long, to: Long): String {
-        Files.newByteChannel(file, StandardOpenOption.READ).use { channel ->
-            channel.position(from)
-            val buffer = java.nio.ByteBuffer.allocate((to - from).toInt().coerceAtLeast(0))
-            while (buffer.hasRemaining() && channel.read(buffer) > 0) Unit
-            return String(buffer.array(), 0, buffer.position(), StandardCharsets.UTF_8)
-        }
     }
 
     private fun parse(line: String): HookEvent? {
@@ -96,22 +97,35 @@ internal class HookEventLog(private val file: Path = ClaudePaths.hookEventLog) {
         offset = runCatching { if (file.exists()) file.fileSize() else 0L }.getOrDefault(0L)
     }
 
-    private fun truncate() {
+    /**
+     * Resets the log, without destroying what has not been read.
+     *
+     * Two readers race the truncation: a hook appending between our read and the reset, and
+     * another IDE process tailing the same file with its own offset. The first is answered by
+     * re-checking the size through the same channel that truncates — a grown file keeps
+     * everything for the next read. The second by only resetting a log that has been quiet
+     * for a while, long enough for any other live tail to have drained it; [force] overrides
+     * the quiet requirement when the log has grown far past its bound, trading another
+     * process's unread events for a hard cap on disk growth.
+     */
+    private fun truncate(force: Boolean) {
         runCatching {
-            Files.write(file, ByteArray(0), StandardOpenOption.TRUNCATE_EXISTING)
-            offset = 0
+            if (!force) {
+                val quietMillis =
+                    System.currentTimeMillis() - file.getLastModifiedTime().toMillis()
+                if (quietMillis < TRUNCATE_QUIET_MILLIS) return
+            }
+            FileChannel.open(file, StandardOpenOption.WRITE).use { channel ->
+                if (channel.size() == offset) {
+                    channel.truncate(0)
+                    offset = 0
+                }
+            }
         }.onFailure { thisLogger().debug("Cannot truncate hook event log", it) }
     }
 
-    private fun JsonObject.string(name: String): String? {
-        val element = get(name) ?: return null
-        if (element.isJsonNull || !element.isJsonPrimitive) return null
-        return runCatching { element.asString }.getOrNull()?.takeIf { it.isNotBlank() }
-    }
-
-    private fun JsonObject.boolean(name: String): Boolean? {
-        val element = get(name) ?: return null
-        if (element.isJsonNull || !element.isJsonPrimitive) return null
-        return runCatching { element.asBoolean }.getOrNull()
+    private companion object {
+        /** How long the log must sit unmodified before a non-forced reset may take it. */
+        const val TRUNCATE_QUIET_MILLIS = 5_000L
     }
 }

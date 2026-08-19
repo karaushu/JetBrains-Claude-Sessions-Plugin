@@ -2,6 +2,7 @@ package dev.andy.claudesessions.hooks
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import dev.andy.claudesessions.data.LiveSessionWatcher
 import dev.andy.claudesessions.model.SessionState
 import dev.andy.claudesessions.settings.ClaudeSessionsSettings
 import kotlinx.coroutines.CoroutineScope
@@ -122,7 +123,14 @@ internal class HookEventBus(private val scope: CoroutineScope) {
         if (tracker.apply(events)) _revision.value++
 
         // The first read is the log as it stood before we were listening.
-        if (wasPriming) return
+        if (wasPriming) {
+            // That history can span days, and a session that died without a SessionEnd — a
+            // crash, a SIGKILL — would sit in the tracker as RUNNING forever. Keep primed
+            // state only for sessions that still have a live process behind them.
+            val liveIds = withContext(Dispatchers.IO) { LiveSessionWatcher().poll().keys }
+            if (tracker.retainAll(liveIds)) _revision.value++
+            return
+        }
         events.forEach { _events.tryEmit(it) }
     }
 }

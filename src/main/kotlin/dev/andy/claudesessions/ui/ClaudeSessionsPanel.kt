@@ -1,8 +1,5 @@
 package dev.andy.claudesessions.ui
 
-import com.intellij.notification.NotificationAction
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
@@ -14,7 +11,6 @@ import com.intellij.openapi.application.UI
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.AnimatedIcon
@@ -30,6 +26,7 @@ import dev.andy.claudesessions.actions.ArchiveSessionAction
 import dev.andy.claudesessions.actions.StopSessionAction
 import dev.andy.claudesessions.model.SessionItem
 import dev.andy.claudesessions.terminal.ClaudeTerminalLauncher
+import dev.andy.claudesessions.terminal.SessionOpener
 import dev.andy.claudesessions.usage.UsageService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -297,6 +294,10 @@ internal class ClaudeSessionsPanel(
     /** Same sessions as last time: swap the payloads so only changed rows repaint. */
     private fun refreshExistingNodes(items: List<SessionItem>) {
         val bySessionId = items.associateBy { it.sessionId }
+        // Computed once, with the same keying rule group() uses. Filtering inside the loop
+        // would rescan the whole list per heading — and by a different key, which left the
+        // "Unknown location" heading's live count stuck at zero.
+        val liveCounts = ProjectGroup.liveCounts(items)
         forEachNode { node ->
             when (val payload = node.userObject) {
                 is SessionItem -> {
@@ -307,8 +308,7 @@ internal class ClaudeSessionsPanel(
                     }
                 }
                 is ProjectGroup -> {
-                    val sessions = items.filter { (it.summary.cwd ?: "") == payload.path }
-                    val fresh = payload.copy(liveCount = sessions.count { it.isLive })
+                    val fresh = payload.copy(liveCount = liveCounts[payload.path] ?: 0)
                     if (fresh != payload) {
                         node.userObject = fresh
                         treeModel.nodeChanged(node)
@@ -375,70 +375,7 @@ internal class ClaudeSessionsPanel(
 
     private fun openSelected() {
         val item = selectedSession() ?: return
-
-        // Already showing in an editor tab: just focus it.
-        if (ClaudeTerminalLauncher.isOpen(project, item.sessionId)) {
-            ClaudeTerminalLauncher.openOrFocus(project, item.sessionId, item.summary.cwd, item.summary.title)
-            return
-        }
-
-        // Nothing was ever written, so there is nothing for --resume to find: Claude would
-        // answer "No conversation found with session ID".
-        if (!item.summary.hasTranscript) {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup("Claude Sessions")
-                .createNotification(
-                    "Nothing to resume yet",
-                    "This session has not saved anything, so it cannot be resumed. " +
-                        "Send it a message first, or start a new one with +.",
-                    NotificationType.INFORMATION,
-                )
-                .notify(project)
-            return
-        }
-
-        // A running background agent cannot be resumed in place: it would have two owners.
-        // Offer the two things that do work rather than opening a terminal that refuses.
-        if (item.isBackgroundAgent) {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup("Claude Sessions")
-                .createNotification(
-                    "Running as a background agent",
-                    "This session cannot be resumed while it runs in the background. " +
-                        "Attach to it from Claude's agent view, or branch a copy.",
-                    NotificationType.INFORMATION,
-                )
-                .addAction(
-                    NotificationAction.createSimpleExpiring("Attach") {
-                        ClaudeTerminalLauncher.openAgentsView(project, item.summary.cwd)
-                    },
-                )
-                .addAction(
-                    NotificationAction.createSimpleExpiring("Branch a copy") {
-                        ClaudeTerminalLauncher.openForked(
-                            project, item.sessionId, item.summary.cwd, item.summary.title,
-                        )
-                    },
-                )
-                .notify(project)
-            return
-        }
-
-        // Resuming a session that is live in another process would fight over the transcript.
-        if (item.isLive) {
-            val name = item.live?.name ?: item.sessionId.take(8)
-            val proceed = MessageDialogBuilder
-                .yesNo(
-                    "Session Is Already Running",
-                    "Session \"${UiText.oneLine(name)}\" is running in another process (pid ${item.live?.pid}). " +
-                        "Resuming it here may conflict with that session.\n\nResume anyway?",
-                )
-                .asWarning()
-                .ask(project)
-            if (!proceed) return
-        }
-
-        ClaudeTerminalLauncher.openOrFocus(project, item.sessionId, item.summary.cwd, item.summary.title)
+        SessionOpener.open(project, item)
     }
 
     override fun dispose() {}

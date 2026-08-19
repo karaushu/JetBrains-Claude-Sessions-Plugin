@@ -60,6 +60,23 @@ class ReviewReplyLogTest {
     }
 
     @Test
+    fun `the position never points into a half-written line`(@TempDir dir: Path) {
+        val file = dir.resolve("replies.jsonl")
+        val complete = line("C1.1") + "\n"
+        file.writeText(complete + """{"comment_id":"C2.1","st""")
+        val log = ReviewReplyLog(file)
+
+        assertEquals(listOf("C1.1"), log.readNew().map { it.commentId })
+        assertEquals(complete.toByteArray().size.toLong(), log.offset)
+
+        // A restart resumes from the persisted offset and still sees the completed reply —
+        // an offset past the torn line would silently lose it.
+        file.appendText("""atus":"done","summary":"Later."}""" + "\n")
+        val resumed = ReviewReplyLog(file, startOffset = log.offset)
+        assertEquals(listOf("C2.1"), resumed.readNew().map { it.commentId })
+    }
+
+    @Test
     fun `a pretty-printed object is recovered`(@TempDir dir: Path) {
         val file = dir.resolve("replies.jsonl")
         file.writeText(

@@ -121,7 +121,14 @@ internal class ReviewEditorSession(
             val gone = drafts.get(path, fileLine) == null ||
                 current.values.any { it.anchor.line == fileLine } ||
                 lines.toDocumentLine(fileLine) == null
-            if (gone) removeDraftInlay(fileLine)
+            if (gone) {
+                removeDraftInlay(fileLine)
+                continue
+            }
+            // A rediff can invalidate the inlay while the draft is still wanted. Drop the
+            // stale entry so the re-open loop below redraws the box — its text is safe in
+            // the drafts service. Thread panels get the same guard via `unchanged` above.
+            if (draftInlays[fileLine]?.isValid != true) removeDraftInlay(fileLine)
         }
         drafts.linesIn(path).forEach { fileLine ->
             if (fileLine !in draftInlays && current.values.none { it.anchor.line == fileLine }) {
@@ -171,9 +178,13 @@ internal class ReviewEditorSession(
             header = ReviewLabels.draftHeader(line),
             onChange = { drafts.put(path, line, it) },
             onSubmit = { text ->
+                // The box travels with the text when the agent edits above it, but its key
+                // stays the line it was opened on. Anchor the note where the box is now —
+                // anchoring at the opened line would quote whatever code has shifted there.
+                val anchorLine = currentFileLine(openedAt = line) ?: line
                 drafts.remove(path, line)
                 removeDraftInlay(line)
-                store.addComment(anchorAt(line), text)
+                store.addComment(anchorAt(anchorLine), text)
                 ReviewPersistence.scheduleSave(project)
             },
             onCancel = {
@@ -231,6 +242,13 @@ internal class ReviewEditorSession(
             contextStartLine = from,
             languageId = ReviewPaths.languageId(path),
         )
+    }
+
+    /** The file line a draft's box sits on now, or null when the inlay is gone. */
+    private fun currentFileLine(openedAt: Int): Int? {
+        val inlay = draftInlays[openedAt]?.takeIf { it.isValid } ?: return null
+        val documentLine = editor.document.getLineNumber(inlay.offset)
+        return lines.toFileLine(documentLine)
     }
 
     private fun removeThreadInlay(id: String) {

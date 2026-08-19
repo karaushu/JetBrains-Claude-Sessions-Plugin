@@ -4,10 +4,12 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.thisLogger
 import dev.andy.claudesessions.model.SessionSummary
-import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -23,26 +25,48 @@ import kotlin.io.path.nameWithoutExtension
  *
  * Transcripts reach 6.5 MB with base64 images inline, so nothing here parses a whole
  * file. Only short records are handed to the JSON parser; longer lines are skipped on a
- * length check. Results are cached on (size, mtime), which is sound because transcripts
- * are append-only.
+ * length check.
+ *
+ * Results are cached on (size, mtime). Transcripts are append-only, so a grown file is
+ * scanned incrementally from the previous scan's offset — a live multi-megabyte session
+ * costs only its appended bytes per rescan. A file that shrank was rewritten (compaction),
+ * so it is rescanned from the start.
  */
-internal class SessionIndexer {
+internal class SessionIndexer(
+    /**
+     * A live session appends constantly, so (size, mtime) alone would invalidate the cache
+     * on every tick. Titles change rarely, and last-activity comes from a cheap stat, so a
+     * re-scan of a changing file is rate-limited. Injectable so tests need not wait.
+     */
+    private val minRescanIntervalNanos: Long = TimeUnit.SECONDS.toNanos(30),
+) {
+
+    /** The running fold over a transcript's records; resumable, so appends merge in. */
+    private data class ScanState(
+        var cwd: String? = null,
+        var gitBranch: String? = null,
+        var startedAt: Instant? = null,
+        var parsedSessionId: String? = null,
+        // Index records accrete throughout the file, so the LAST occurrence of each wins.
+        var worktreeName: String? = null,
+        var originalCwd: String? = null,
+        var customTitle: String? = null,
+        var aiTitle: String? = null,
+        var lastPrompt: String? = null,
+        var slug: String? = null,
+    )
 
     private class Cached(
         val size: Long,
         val mtime: Long,
         val scannedAtNanos: Long,
         val summary: SessionSummary,
+        val state: ScanState,
+        /** Offset just past the last complete line consumed; the next scan resumes here. */
+        val consumedBytes: Long,
     )
 
     private val cache = ConcurrentHashMap<Path, Cached>()
-
-    /**
-     * A live session appends constantly, so (size, mtime) alone would invalidate the cache
-     * on every tick and re-read multi-megabyte files. Titles change rarely, and last-activity
-     * comes from a cheap stat, so a full re-scan of a changing file is rate-limited.
-     */
-    private val minRescanIntervalNanos = TimeUnit.SECONDS.toNanos(30)
 
     /** Longest line we are willing to hand to the JSON parser. */
     private val maxParsedLineLength = 8 * 1024
@@ -79,103 +103,139 @@ internal class SessionIndexer {
             }
         }
 
-        val summary = runCatching { scan(file, size, mtime) }
+        // A grown file only appended, so resume the fold; a shrunken one was rewritten.
+        val resumable = previous?.takeIf { size >= it.consumedBytes }
+        val state = resumable?.state?.copy() ?: ScanState()
+        val startOffset = resumable?.consumedBytes ?: 0L
+
+        val consumed = runCatching { scanFrom(file, startOffset, state) }
             .onFailure { thisLogger().warn("Failed to index $file", it) }
             .getOrNull() ?: return previous?.summary
+        val summary = buildSummary(file, state, size, mtime) ?: return previous?.summary
 
-        cache[file] = Cached(size, mtime, System.nanoTime(), summary)
+        cache[file] = Cached(size, mtime, System.nanoTime(), summary, state, consumed)
         return summary
     }
 
-    private fun scan(file: Path, size: Long, mtime: Long): SessionSummary? {
-        var cwd: String? = null
-        var gitBranch: String? = null
-        var startedAt: Instant? = null
-        var parsedSessionId: String? = null
+    /**
+     * Folds every complete line from [startOffset] into [state] and returns the offset just
+     * past the last newline consumed. Bytes after the last newline — a record the CLI is
+     * still writing — are left for the next scan, so a torn record is never half-parsed.
+     */
+    private fun scanFrom(file: Path, startOffset: Long, state: ScanState): Long {
+        FileChannel.open(file, StandardOpenOption.READ).use { channel ->
+            channel.position(startOffset)
+            val buffer = ByteBuffer.allocate(CHUNK_BYTES)
+            val pending = ByteArrayOutputStream()
+            // Bytes of the current line beyond the keep-cap: counted for offset accounting,
+            // never buffered — an inline base64 image must not balloon the heap.
+            var pendingSkipped = 0L
+            var isFirstFileLine = startOffset == 0L
+            var consumed = startOffset
 
-        // Index records are rewritten in place throughout the file, so the LAST
-        // occurrence of each wins.
-        var worktreeName: String? = null
-        var originalCwd: String? = null
-        var customTitle: String? = null
-        var aiTitle: String? = null
-        var lastPrompt: String? = null
-        var slug: String? = null
+            // UTF-8 is at most 4 bytes per char, so a line kept in full up to this byte cap
+            // can never be rejected by the char cap alone — the caps agree.
+            fun stash(bytes: ByteArray, from: Int, until: Int) {
+                val length = until - from
+                if (length <= 0) return
+                val cap = (if (isFirstFileLine) firstLineParseCap else maxParsedLineLength) * MAX_UTF8_BYTES_PER_CHAR
+                val room = (cap - pending.size()).coerceIn(0, length)
+                if (room > 0) pending.write(bytes, from, room)
+                pendingSkipped += length - room
+            }
 
-        val reader: BufferedReader = runCatching {
-            Files.newBufferedReader(file, StandardCharsets.UTF_8)
-        }.getOrNull() ?: return null
-
-        reader.use {
-            var isFirstLine = true
-            while (true) {
-                val line = it.readLine() ?: break
-                if (line.isEmpty()) continue
-
-                // cwd and gitBranch live on envelope records, which can exceed the length
-                // cap. The first record is the cheapest reliable source for both, so parse
-                // it regardless (bounded, to stay safe against a pathological line).
-                val withinCap = line.length <= maxParsedLineLength ||
-                    (isFirstLine && line.length <= firstLineParseCap)
-                isFirstLine = false
-                if (!withinCap) continue
-
-                val obj = parseOrNull(line) ?: continue
-
-                when (obj.string("type")) {
-                    "custom-title" -> obj.string("customTitle")?.let { v -> customTitle = v }
-                    "ai-title" -> obj.string("aiTitle")?.let { v -> aiTitle = v }
-                    "last-prompt" -> obj.string("lastPrompt")?.let { v -> lastPrompt = v }
-                    // A relocated session reports a cwd that disagrees with its directory name.
-                    "relocated" -> obj.string("relocatedCwd")?.let { v -> cwd = v }
-                    "worktree-state" -> (obj.get("worktreeSession") as? JsonObject)?.let { w ->
-                        w.string("worktreeName")?.let { v -> worktreeName = v }
-                        w.string("originalCwd")?.let { v -> originalCwd = v }
+            while (channel.read(buffer) > 0) {
+                val bytes = buffer.array()
+                val limit = buffer.position()
+                var lineStart = 0
+                for (i in 0 until limit) {
+                    if (bytes[i] != NEWLINE) continue
+                    stash(bytes, lineStart, i)
+                    if (pendingSkipped == 0L) {
+                        fold(pending.toString(StandardCharsets.UTF_8).trimEnd('\r'), state, isFirstFileLine)
                     }
+                    consumed += pending.size() + pendingSkipped + 1
+                    pending.reset()
+                    pendingSkipped = 0
+                    isFirstFileLine = false
+                    lineStart = i + 1
                 }
+                stash(bytes, lineStart, limit)
+                buffer.clear()
+            }
+            return consumed
+        }
+    }
 
-                if (cwd == null) cwd = obj.string("cwd")
-                if (gitBranch == null) gitBranch = obj.string("gitBranch")
-                if (slug == null) slug = obj.string("slug")
-                if (parsedSessionId == null) parsedSessionId = obj.string("sessionId")
-                if (startedAt == null) {
-                    startedAt = obj.string("timestamp")?.let { ts ->
-                        runCatching { Instant.parse(ts) }.getOrNull()
-                    }
-                }
+    private fun fold(line: String, state: ScanState, isFirstFileLine: Boolean) {
+        if (line.isEmpty()) return
+
+        // cwd and gitBranch live on envelope records, which can exceed the length cap. The
+        // first record is the cheapest reliable source for both, so parse it regardless
+        // (bounded, to stay safe against a pathological line).
+        val withinCap = line.length <= maxParsedLineLength ||
+            (isFirstFileLine && line.length <= firstLineParseCap)
+        if (!withinCap) return
+
+        val obj = parseOrNull(line) ?: return
+
+        when (obj.string("type")) {
+            "custom-title" -> obj.string("customTitle")?.let { state.customTitle = it }
+            "ai-title" -> obj.string("aiTitle")?.let { state.aiTitle = it }
+            "last-prompt" -> obj.string("lastPrompt")?.let { state.lastPrompt = it }
+            // A relocated session reports a cwd that disagrees with its directory name.
+            "relocated" -> obj.string("relocatedCwd")?.let { state.cwd = it }
+            "worktree-state" -> (obj.get("worktreeSession") as? JsonObject)?.let { w ->
+                w.string("worktreeName")?.let { state.worktreeName = it }
+                w.string("originalCwd")?.let { state.originalCwd = it }
             }
         }
 
+        if (state.cwd == null) state.cwd = obj.string("cwd")
+        if (state.gitBranch == null) state.gitBranch = obj.string("gitBranch")
+        if (state.slug == null) state.slug = obj.string("slug")
+        if (state.parsedSessionId == null) state.parsedSessionId = obj.string("sessionId")
+        if (state.startedAt == null) {
+            state.startedAt = obj.string("timestamp")?.let { ts ->
+                runCatching { Instant.parse(ts) }.getOrNull()
+            }
+        }
+    }
+
+    private fun buildSummary(file: Path, state: ScanState, size: Long, mtime: Long): SessionSummary? {
         // The filename is the session id in every observed case; the field is a fallback.
         val sessionId = file.nameWithoutExtension.takeIf { it.isNotBlank() }
-            ?: parsedSessionId
+            ?: state.parsedSessionId
             ?: return null
 
         return SessionSummary(
             sessionId = sessionId,
             transcript = file,
-            cwd = cwd,
-            gitBranch = gitBranch,
-            title = customTitle ?: aiTitle ?: slug?.let(::humanizeSlug) ?: lastPrompt,
-            startedAt = startedAt,
+            cwd = state.cwd,
+            gitBranch = state.gitBranch,
+            title = state.customTitle
+                ?: state.aiTitle
+                ?: state.slug?.let(::humanizeSlug)
+                ?: state.lastPrompt,
+            startedAt = state.startedAt,
             // Transcripts are append-only, so mtime is exactly the last activity.
             lastActivity = Instant.ofEpochMilli(mtime),
             sizeBytes = size,
-            worktreeName = worktreeName,
-            originalCwd = originalCwd,
+            worktreeName = state.worktreeName,
+            originalCwd = state.originalCwd,
         )
     }
 
     private fun parseOrNull(line: String): JsonObject? =
         runCatching { JsonParser.parseString(line) as? JsonObject }.getOrNull()
 
-    private fun JsonObject.string(name: String): String? {
-        val element = get(name) ?: return null
-        if (element.isJsonNull || !element.isJsonPrimitive) return null
-        return runCatching { element.asString }.getOrNull()?.takeIf { it.isNotBlank() }
-    }
-
     /** `i-want-a-plugin-serialized-badger` reads better as `I want a plugin serialized badger`. */
     private fun humanizeSlug(slug: String): String =
         slug.replace('-', ' ').replaceFirstChar { it.uppercase() }
+
+    private companion object {
+        const val CHUNK_BYTES = 64 * 1024
+        const val NEWLINE = '\n'.code.toByte()
+        const val MAX_UTF8_BYTES_PER_CHAR = 4
+    }
 }

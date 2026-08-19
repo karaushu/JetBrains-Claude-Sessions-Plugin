@@ -5,6 +5,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import dev.andy.claudesessions.hooks.HookEventBus
 import dev.andy.claudesessions.model.SessionItem
+import dev.andy.claudesessions.model.SessionState
 import dev.andy.claudesessions.model.SessionSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
@@ -48,6 +51,16 @@ internal class SessionStore(
     private val tickInterval = 300L
     private val statusEveryTicks = 3
     private val reindexEveryTicks = 16
+
+    /**
+     * The state review features should treat [sessionId] as being in: the row's own state
+     * while a process is live, else whatever the hooks last said. One home for the fallback
+     * rule — the sender and the reply watcher must never disagree on it.
+     */
+    fun effectiveState(sessionId: String): SessionState? {
+        val item = items.value.firstOrNull { it.sessionId == sessionId }
+        return item?.state?.takeIf { it != SessionState.HISTORICAL } ?: hooks.states()[sessionId]
+    }
 
     fun setShowAllProjects(value: Boolean) {
         if (_showAllProjects.value == value) return
@@ -88,11 +101,27 @@ internal class SessionStore(
     @Volatile
     private var cachedSummaries: List<SessionSummary>? = null
 
-    private suspend fun refresh(forceReindex: Boolean) {
-        val summaries = if (forceReindex || cachedSummaries == null) {
-            withContext(Dispatchers.IO) { loadSummaries() }.also { cachedSummaries = it }
+    /**
+     * The tick loop and [requestRefresh] can race; unserialized, a slow all-projects load
+     * finishing after a toggle to project-only would overwrite the newer result with
+     * cross-project rows.
+     */
+    private val refreshLock = Mutex()
+
+    private suspend fun refresh(forceReindex: Boolean): Unit = refreshLock.withLock {
+        // One mode for the whole pass, so summaries and placeholders cannot disagree.
+        val showAll = _showAllProjects.value
+
+        val summaries: List<SessionSummary>
+        if (forceReindex || cachedSummaries == null) {
+            val loaded = withContext(Dispatchers.IO) { loadSummaries(showAll) }
+            // The toggle flipped mid-load: this list describes the wrong mode. Drop it —
+            // the refresh the toggle requested is already waiting on the lock.
+            if (_showAllProjects.value != showAll) return
+            cachedSummaries = loaded
+            summaries = loaded
         } else {
-            cachedSummaries.orEmpty()
+            summaries = cachedSummaries.orEmpty()
         }
 
         val live = withContext(Dispatchers.IO) { liveWatcher.poll() }
@@ -102,7 +131,7 @@ internal class SessionStore(
             live = live.values,
             knownSessionIds = summaries.mapTo(HashSet()) { it.sessionId },
             projectBasePath = project.basePath,
-            allProjects = _showAllProjects.value,
+            allProjects = showAll,
         )
 
         _items.value = (summaries + placeholders)
@@ -120,11 +149,11 @@ internal class SessionStore(
             )
     }
 
-    private fun loadSummaries(): List<SessionSummary> {
+    private fun loadSummaries(showAll: Boolean): List<SessionSummary> {
         val projects = ClaudePaths.projects
         if (!projects.isDirectory()) return emptyList()
 
-        if (_showAllProjects.value) {
+        if (showAll) {
             val dirs = runCatching { projects.listDirectoryEntries().filter { it.isDirectory() } }
                 .getOrElse { emptyList() }
             return dirs.flatMap { indexer.indexDirectory(it) }

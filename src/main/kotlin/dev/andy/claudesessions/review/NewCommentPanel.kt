@@ -3,7 +3,11 @@ package dev.andy.claudesessions.review
 import com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.CommonShortcuts
+import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.actionSystem.ShortcutSet
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
@@ -14,9 +18,14 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.NamedColorUtil
 import java.awt.BorderLayout
 import java.awt.Cursor
+import java.awt.event.ActionEvent
+import java.awt.event.InputEvent
+import java.awt.event.KeyEvent
+import javax.swing.AbstractAction
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.KeyStroke
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -79,10 +88,17 @@ internal class NewCommentPanel(
             override fun changedUpdate(e: DocumentEvent) = changed()
         })
 
-        // Scoped to the text area so they never reach the diff frame. Plain Enter stays a
-        // newline; getCtrlEnter is Cmd+Enter on macOS and Ctrl+Enter elsewhere.
-        DumbAwareAction.create { submit() }
-            .registerCustomShortcutSet(CommonShortcuts.getCtrlEnter(), textArea, parentDisposable)
+        // Enter submits the note. A note is a sentence or two, so the key under the finger
+        // is the one that sends; Alt+Enter and Cmd/Ctrl+Enter make a new line.
+        //
+        // Two mechanisms, each for its own reason. Enter goes through the text area's own
+        // input map, because a JTextArea binds Enter to insert-break itself and an IDE
+        // action would be competing with that binding. The newline keys go through IDE
+        // actions, because Alt+Enter is Show Intentions: an action registered on this
+        // component shadows the global one, which an input-map entry does not.
+        submitOnEnter()
+        DumbAwareAction.create { textArea.replaceSelection("\n") }
+            .registerCustomShortcutSet(newLineShortcuts(), textArea, parentDisposable)
         DumbAwareAction.create { onCancel() }
             .registerCustomShortcutSet(CommonShortcuts.ESCAPE, textArea, parentDisposable)
     }
@@ -115,6 +131,7 @@ internal class NewCommentPanel(
             add(
                 JButton(submitLabel).apply {
                     isDefaultCapable = false
+                    toolTipText = keyHint()
                     // The IDE's own primary style — filled in the accent colour, the way Commit
                     // looks. A plain button's white face read as a stray frame on the block.
                     putClientProperty(DarculaButtonUI.DEFAULT_STYLE_KEY, true)
@@ -147,7 +164,53 @@ internal class NewCommentPanel(
         onSubmit(text)
     }
 
+    /**
+     * Binds Enter to [submit] in the text area's own input map.
+     *
+     * The map put on the component itself sits in front of the one the text-area UI
+     * installs, so this replaces `insert-break` for Enter alone. Every other key, including
+     * the modified Enters below, still reaches the UI's own bindings.
+     */
+    private fun submitOnEnter() {
+        textArea.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), SUBMIT_KEY)
+        textArea.actionMap.put(
+            SUBMIT_KEY,
+            object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent) = submit()
+            },
+        )
+    }
+
+    /** What the tooltip says, in the platform's own notation for the keys. */
+    private fun keyHint(): String {
+        val enter = KeymapUtil.getKeystrokeText(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0))
+        val newLine = newLineKeystrokes().joinToString(" or ", transform = KeymapUtil::getKeystrokeText)
+        return "$enter to add it, $newLine for a new line"
+    }
+
     private companion object {
         const val MIN_ROWS = 3
+
+        /** Our own action-map key, so nothing else in the text area answers to it. */
+        const val SUBMIT_KEY = "claudesessions.submitNote"
+
+        /**
+         * The keys that insert a newline instead of submitting.
+         *
+         * `getCtrlEnter` is Cmd+Enter on macOS and Ctrl+Enter elsewhere, which is what this
+         * field used to submit on. It stays bound rather than being dropped: it is the habit
+         * anyone who used the field before this change already has, and it now does the other
+         * half of the job.
+         */
+        fun newLineKeystrokes(): List<KeyStroke> = buildList {
+            add(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.ALT_DOWN_MASK))
+            CommonShortcuts.getCtrlEnter().shortcuts
+                .filterIsInstance<KeyboardShortcut>()
+                .forEach { add(it.firstKeyStroke) }
+        }
+
+        fun newLineShortcuts(): ShortcutSet = CustomShortcutSet(
+            *newLineKeystrokes().map { KeyboardShortcut(it, null) }.toTypedArray(),
+        )
     }
 }

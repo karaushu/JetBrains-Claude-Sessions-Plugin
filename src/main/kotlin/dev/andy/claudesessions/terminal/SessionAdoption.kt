@@ -1,5 +1,6 @@
 package dev.andy.claudesessions.terminal
 
+import dev.andy.claudesessions.data.ClaudePaths
 import dev.andy.claudesessions.model.SessionItem
 import java.time.Instant
 
@@ -29,12 +30,22 @@ internal object SessionAdoption {
     ): SessionItem? = items
         .asSequence()
         .filter { it.sessionId !in claimed }
-        // A session with no recorded cwd is still a candidate: it was found in the directory
-        // we scanned, which is the one we launched in.
-        .filter { workingDirectory == null || it.summary.cwd == null || it.summary.cwd == workingDirectory }
+        .filter { workingDirectory == null || matchesLaunchDirectory(it, workingDirectory) }
         .filter { startedAfterLaunch(it, launchedAtMillis) }
         // Earliest qualifying session: if two were started close together, ours came first.
         .minByOrNull { it.summary.startedAt ?: Instant.MAX }
+
+    /**
+     * A candidate with no recorded cwd is only trusted when its transcript sits in the
+     * launch directory's own transcript folder. "It was found in the directory we scanned"
+     * used to be enough — but with "show all projects" on, [pick] sees every project's
+     * sessions, and an unrelated null-cwd session could be adopted by this tab.
+     */
+    private fun matchesLaunchDirectory(item: SessionItem, workingDirectory: String): Boolean {
+        item.summary.cwd?.let { return it == workingDirectory }
+        return item.summary.transcript.parent?.fileName?.toString() ==
+            ClaudePaths.encodeProjectDir(workingDirectory)
+    }
 
     private fun startedAfterLaunch(item: SessionItem, launchedAtMillis: Long): Boolean {
         val started = item.summary.startedAt ?: return false

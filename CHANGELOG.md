@@ -3,14 +3,69 @@
 Notable changes to Claude Sessions. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.2.0 — 2026-08-19
 
 ### Added
 
+- Notifications now come only from sessions running in this IDE's own tabs. Claude's hooks report
+  every session on the machine, so a turn finishing in the desktop app or in a terminal outside
+  the IDE used to raise a notification here. Switch it back under
+  **Settings | Tools | Claude Sessions**.
 - Review notes now work in a **unified diff** as well as side by side. A unified viewer numbers
   its own interleaved document rather than the file, so notes are held in file lines and converted
   for drawing through the viewer's own strict line mapping. A hovered deletion offers no `+`: that
   line exists only in the before side, and there is nothing in the file for a note to hold on to.
+
+### Changed
+
+- **Enter** now adds a review note; **Option+Enter** or **Cmd+Enter** starts a new line. A note is
+  a sentence or two, so the key under the finger is the one that finishes it.
+- A round now tells the agent to answer in the language the note is written in. A note in Ukrainian
+  came back answered in English, because nothing in the round said otherwise.
+- Changed transcripts are scanned incrementally from the previous read's offset. Transcripts are
+  append-only, so a live multi-megabyte session now costs its appended bytes per rescan, not the
+  whole file; a file that shrank — a compaction — is rescanned from the start.
+- `~/.claude.json` is re-parsed only when its size or mtime actually changed, and the git worktree
+  registry is cached until its directory changes — both were re-read in full every few seconds.
+
+### Fixed
+
+- npm installs of Claude Code run under `node`, so every live session read as dead — and could not
+  be stopped. The liveness check now also reads the process arguments, where the script path is.
+- Worktrees registered with relative paths — git's default since 2.51 — were invisible: the
+  pointers were resolved against the IDE process's working directory instead of the repository.
+- With no usage figures to age-gate on — an API-key account never writes any — the auto-refresh
+  spawned a full `claude -p /usage` process every 30 seconds. Attempts are now gated by the same
+  interval, and clicking the widget during a background refresh no longer leaves the popup stuck
+  on "Asking Claude…".
+- Concurrent refreshes could leave the list showing another project's sessions for a few seconds
+  after toggling "show all projects" off; refreshes are now serialised.
+- Hook-derived session state was shared between threads without a lock, which could kill the
+  refresh loop outright. After an IDE restart, sessions that died without a `SessionEnd` were also
+  resurrected in whatever state they crashed in; primed state is now kept only for live processes.
+- Truncating the hook event log could destroy events appended between the read and the truncation
+  — a lost `Stop` left a session spinning forever. The log now resets only when quiet, and the
+  size is re-checked through the same channel that truncates.
+- A `Stop` event fired by a stop hook that asked Claude to continue flipped the session to idle
+  mid-turn.
+- The "Unknown location" heading's live count was refreshed against the wrong key and stuck at
+  zero; in-place refreshes also rescanned the whole list once per heading.
+- A draft note vanished for good when the agent rewrote the file under it, and a submitted draft
+  anchored at the line its box was opened on rather than the line the box had moved to. Review
+  hunks also kept capture-time numbering after re-anchoring, putting the `>` marker on the wrong
+  row.
+- "Send them anyway?" on a closed tab looped forever — a closed tab has nothing to type into and
+  is now refused outright. A send that crashed mid-flight also left its notes stuck in "sent".
+- A follow-up reply typed while a round was in flight closed the round before the agent answered,
+  and the answer was never read. A reply flushed in two writes could likewise be lost across an
+  IDE restart, because the persisted read position pointed into the half-written line.
+- Review paths are now stated against the project root, so an agent whose working directory is a
+  worktree edits the reviewed tree rather than its own copy.
+- A notification's "Open Session" bypassed every resume guard and could seize a session another
+  process still owned; it now goes through the same guarded path as the session list.
+- Closing a project never released a terminal tab's process scope, and a tab closed and reopened
+  quickly could delete the fresh tab's registration instead of the old one's.
+- A `+` tab could adopt an unrelated project's session while "show all projects" was on.
 
 ## 1.1.0 — 2026-08-12
 

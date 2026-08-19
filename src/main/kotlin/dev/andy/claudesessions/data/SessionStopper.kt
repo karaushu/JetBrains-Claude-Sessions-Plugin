@@ -56,8 +56,7 @@ internal object SessionStopper {
         val handle = ProcessHandle.of(pid).orElse(null) ?: return Result.AlreadyGone
         if (!handle.isAlive) return Result.AlreadyGone
 
-        val command = handle.info().command().orElse(null)
-        if (command != null && !command.contains(requireCommandContaining, ignoreCase = true)) {
+        if (!ClaudeProcesses.looksLike(handle, requireCommandContaining)) {
             return Result.NotClaude
         }
 

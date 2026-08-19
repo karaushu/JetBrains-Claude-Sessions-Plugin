@@ -69,7 +69,8 @@ internal data class HookEvent(
         "SessionStart" -> HookDerivedState.IDLE
         "SessionEnd" -> HookDerivedState.ENDED
         "UserPromptSubmit" -> HookDerivedState.RUNNING
-        "Stop" -> HookDerivedState.IDLE
+        // A stop hook asked Claude to keep going, so the turn is still in flight.
+        "Stop" -> if (stopHookActive) HookDerivedState.RUNNING else HookDerivedState.IDLE
         "Notification" -> when (notificationType) {
             in BLOCKING_NOTIFICATIONS -> HookDerivedState.NEEDS_INPUT
             // "Your turn" rather than "I am blocked" — the same thing the pid file calls idle.
