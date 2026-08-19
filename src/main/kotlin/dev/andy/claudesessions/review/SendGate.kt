@@ -24,6 +24,10 @@ internal sealed interface SendGate {
 
     data object NoTarget : SendGate
 
+    /**
+     * The session has no open tab, so there is nothing to type into. Refused outright:
+     * offering "send anyway" would promise something the send path cannot do.
+     */
     data class TabClosed(val sessionId: String, val title: String) : SendGate
 
     /** Claude is mid-turn. The CLI queues typed text and reads it at an unpredictable point. */
@@ -47,7 +51,7 @@ internal sealed interface SendGate {
     val isReady: Boolean get() = this is Ready
 
     /** The round can go, but the user should be told what they are sending into first. */
-    val needsConfirmation: Boolean get() = this is Unsure || this is Busy || this is TabClosed
+    val needsConfirmation: Boolean get() = this is Unsure || this is Busy
 
     fun problem(): String? = when (this) {
         is Ready -> null

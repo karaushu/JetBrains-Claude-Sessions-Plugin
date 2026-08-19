@@ -123,7 +123,15 @@ internal class ReviewReplyWatcher(private val project: Project, scope: Coroutine
      * there at all, or the fallback timeout ran out.
      */
     private fun isOver(round: ReviewRound): Boolean {
-        if (store.awaitedCommentIds(round.id).isEmpty()) return true
+        // Nothing awaited does not yet mean nothing more will come: a follow-up typed on the
+        // round's only thread re-queues it and clears its debt while the agent is still
+        // mid-answer. Hold the round while the session works, so that answer lands in the
+        // thread instead of being orphaned in a file nobody polls.
+        if (store.awaitedCommentIds(round.id).isEmpty() &&
+            stateOf(round.sessionId) != SessionState.RUNNING
+        ) {
+            return true
+        }
         if (System.currentTimeMillis() - round.startedAtMillis > SILENCE_TIMEOUT_MS) return true
         if (sessionGone(round)) return true
 
@@ -147,11 +155,8 @@ internal class ReviewReplyWatcher(private val project: Project, scope: Coroutine
             .none { it.sessionId == round.sessionId && it.isLive }
     }
 
-    private fun stateOf(sessionId: String): SessionState? {
-        val item = project.service<SessionStore>().items.value
-            .firstOrNull { it.sessionId == sessionId }
-        return item?.state?.takeIf { it != SessionState.HISTORICAL } ?: hooks.states()[sessionId]
-    }
+    private fun stateOf(sessionId: String): SessionState? =
+        project.service<SessionStore>().effectiveState(sessionId)
 
     private suspend fun finish(round: ReviewRound) {
         val gone = sessionGone(round)

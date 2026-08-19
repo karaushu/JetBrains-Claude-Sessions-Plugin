@@ -1,11 +1,9 @@
 package dev.andy.claudesessions.review
 
 import com.intellij.openapi.diagnostic.thisLogger
-import java.nio.ByteBuffer
+import dev.andy.claudesessions.data.FileTail
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import kotlin.io.path.exists
 import kotlin.io.path.fileSize
 
@@ -24,9 +22,11 @@ import kotlin.io.path.fileSize
  *   was closed must still land.
  * - The offset is readable and settable, because it is persisted per round so a restart resumes
  *   mid-file rather than replaying.
- * - A trailing partial line is held over to the next read, and a line that opens an object
- *   without closing it is joined with the lines after it. Pretty-printing a JSONL file is the
- *   single most likely way a model breaks the protocol, and recovering costs a few lines here.
+ * - Only complete lines are consumed: a trailing partial line stays in the file and the offset
+ *   stops before it, so the persisted position never points into a half-written reply — and a
+ *   restart cannot lose it. A line that opens an object without closing it is joined with the
+ *   lines after it: pretty-printing a JSONL file is the single most likely way a model breaks
+ *   the protocol, and recovering costs a few lines here.
  */
 internal class ReviewReplyLog(private val file: Path, startOffset: Long = 0) {
 
@@ -36,8 +36,6 @@ internal class ReviewReplyLog(private val file: Path, startOffset: Long = 0) {
     /** True once the file grew past what is worth reading; the round is reported as broken. */
     var overflowed: Boolean = false
         private set
-
-    private var pending: String = ""
 
     /** Replies appended since the last call. Empty whenever nothing changed. */
     fun readNew(): List<ReviewReply> {
@@ -52,36 +50,29 @@ internal class ReviewReplyLog(private val file: Path, startOffset: Long = 0) {
 
         // Smaller than where we were: the agent rewrote the file instead of appending. Reading
         // it again from the start is safe, because applying a reply twice is a no-op.
-        if (size < offset) {
-            offset = 0
-            pending = ""
-        }
+        if (size < offset) offset = 0
         if (size == offset) return emptyList()
 
-        val text = runCatching { readFrom(offset, size) }
+        val bytes = runCatching { FileTail.readBytes(file, offset, size) }
             .onFailure { thisLogger().debug("Cannot read replies file $file", it) }
             .getOrNull() ?: return emptyList()
 
-        offset = size
-        return parse(text)
+        // Consume up to the last newline only. Splitting on bytes rather than decoded text
+        // also keeps a multi-byte character on a read boundary intact for the next pass.
+        val consumed = bytes.lastIndexOf(NEWLINE) + 1
+        if (consumed == 0) return emptyList()
+
+        offset += consumed
+        return parse(String(bytes, 0, consumed, StandardCharsets.UTF_8))
     }
 
     /** Restores a persisted position, so a restart mid-round does not replay the whole file. */
     fun resumeAt(savedOffset: Long) {
         offset = savedOffset.coerceAtLeast(0)
-        pending = ""
     }
 
-    private fun parse(chunk: String): List<ReviewReply> {
-        val text = pending + chunk
-        pending = ""
-
-        val lines = text.split('\n')
-        // A chunk that does not end in a newline ends mid-line; keep the remainder for later.
-        val complete = if (text.endsWith('\n')) lines else {
-            pending = lines.last().take(MAX_LINE_CHARS)
-            lines.dropLast(1)
-        }
+    private fun parse(text: String): List<ReviewReply> {
+        val complete = text.split('\n')
 
         val replies = mutableListOf<ReviewReply>()
         var index = 0
@@ -114,13 +105,11 @@ internal class ReviewReplyLog(private val file: Path, startOffset: Long = 0) {
         return replies
     }
 
-    private fun readFrom(from: Long, to: Long): String {
-        Files.newByteChannel(file, StandardOpenOption.READ).use { channel ->
-            channel.position(from)
-            val buffer = ByteBuffer.allocate((to - from).toInt().coerceAtLeast(0))
-            while (buffer.hasRemaining() && channel.read(buffer) > 0) Unit
-            return String(buffer.array(), 0, buffer.position(), StandardCharsets.UTF_8)
+    private fun ByteArray.lastIndexOf(byte: Byte): Int {
+        for (index in lastIndex downTo 0) {
+            if (this[index] == byte) return index
         }
+        return -1
     }
 
     private companion object {
@@ -129,5 +118,7 @@ internal class ReviewReplyLog(private val file: Path, startOffset: Long = 0) {
         const val MAX_LINE_CHARS = 16 * 1024
 
         const val MAX_JOINED_LINES = 12
+
+        const val NEWLINE = '\n'.code.toByte()
     }
 }

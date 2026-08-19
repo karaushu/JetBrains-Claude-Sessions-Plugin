@@ -108,6 +108,20 @@ class ReviewThreadTest {
     }
 
     @Test
+    fun `re-anchoring shifts the hunk numbering with the line`() {
+        // The hunk shows capture-time code; its numbering must follow the anchor, or the `>`
+        // marker lands on a neighbouring row and the header contradicts the hunk.
+        val before = thread()
+        val moved = before.reanchored(14)
+
+        assertEquals(14, moved.anchor.line)
+        assertEquals(
+            14 - before.anchor.line,
+            moved.anchor.contextStartLine - before.anchor.contextStartLine,
+        )
+    }
+
+    @Test
     fun `an already applied reply is recognised so a replayed file changes nothing`() {
         val answered = thread().markedSent("r1", "s1", 1_100).withAgentReply(reply("C1.1"))
 

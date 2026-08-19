@@ -101,7 +101,17 @@ internal data class ReviewThread(
     /** Moves the note to where its line ended up, or marks it detached when it went away. */
     fun reanchored(line: Int?, lineText: String = anchor.lineText): ReviewThread =
         if (line == null) copy(anchorLost = true)
-        else copy(anchor = anchor.copy(line = line, lineText = lineText), anchorLost = false)
+        else copy(
+            anchor = anchor.copy(
+                line = line,
+                lineText = lineText,
+                // The hunk keeps showing capture-time code, but its numbering must drift
+                // with the anchor: otherwise the header names the new line while the hunk
+                // numbers the old ones, and the `>` marker lands on a neighbouring row.
+                contextStartLine = anchor.contextStartLine + (line - anchor.line),
+            ),
+            anchorLost = false,
+        )
 
     /** True when this reply was already applied, which is what makes a replayed file harmless. */
     fun hasReply(commentId: String, text: String): Boolean =

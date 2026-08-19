@@ -1,5 +1,6 @@
 package dev.andy.claudesessions.review
 
+import dev.andy.claudesessions.ui.UiText
 import java.nio.file.Path
 
 /**
@@ -14,13 +15,18 @@ import java.nio.file.Path
  * agent's own file reads show; being one out here would have it edit the wrong line. And every
  * line of the user's own text is quoted, so a comment containing `---` or a heading cannot
  * break out of its block and appear to be an instruction.
+ *
+ * The language rule is here rather than in the note itself. A note written in Ukrainian was
+ * answered in English, because nothing in the round said otherwise and the surrounding code is
+ * English. The reviewer's own comment is the only signal of the language they want, so the
+ * instructions name it explicitly.
  */
 internal object ReviewFile {
 
-    fun render(threads: List<ReviewThread>, repliesFile: Path): String {
+    fun render(threads: List<ReviewThread>, repliesFile: Path, projectRoot: String): String {
         val awaited = threads.mapNotNull { it.lastUserCommentId }
         return buildString {
-            appendLine(header(threads.size))
+            appendLine(header(threads.size, projectRoot))
             appendLine(instructions(repliesFile))
             if (awaited.isNotEmpty()) {
                 appendLine("Comments awaiting a reply: ${awaited.joinToString(", ")}")
@@ -34,12 +40,13 @@ internal object ReviewFile {
         }
     }
 
-    private fun header(count: Int): String =
+    private fun header(count: Int, projectRoot: String): String =
         """
         # Code review — $count ${plural(count)}
 
-        These are review comments written in the IDE's diff viewer, on the project you are
-        already working in. Every path below is relative to your working directory.
+        These are review comments written in the IDE's diff viewer, on the project at
+        `$projectRoot`. Every path below is relative to that root — resolve them against
+        it even if your own working directory is elsewhere, a worktree for example.
 
         """.trimIndent()
 
@@ -71,6 +78,14 @@ internal object ReviewFile {
         Write each line as soon as that comment is finished rather than all of them at the end,
         so a long review shows progress. Answer every comment id listed here and no other id.
         When each one has a line, you are done — there is nothing else to report.
+
+        ## What language to answer in
+
+        Answer each comment in the language that comment is written in. The reviewer chose it,
+        and the reply appears directly beside their own words. This holds for the `summary`
+        field and for anything you say in the session itself — do not fall back to English
+        because the code is in English. Leave code, paths, identifiers, commands and quoted
+        error text exactly as they are.
 
         """.trimIndent()
 
@@ -139,15 +154,11 @@ internal object ReviewFile {
         .lines()
         .joinToString("\n") { "> ${it.trimEnd()}" }
 
-    private fun oneLine(text: String): String {
-        val collapsed = text.replace(NEWLINES, " ").trim()
-        return if (collapsed.length <= MAX_HISTORY_CHARS) collapsed
-        else collapsed.take(MAX_HISTORY_CHARS).trimEnd() + "…"
-    }
+    // UiText also strips control characters, which this private copy never did — a history
+    // line assembled from model output gets the same sanitisation as the rest of the UI.
+    private fun oneLine(text: String): String = UiText.oneLine(text, MAX_HISTORY_CHARS)
 
     private fun plural(count: Int): String = if (count == 1) "comment" else "comments"
-
-    private val NEWLINES = Regex("\\s*\\R\\s*")
 
     private const val MAX_HISTORY_CHARS = 400
 }

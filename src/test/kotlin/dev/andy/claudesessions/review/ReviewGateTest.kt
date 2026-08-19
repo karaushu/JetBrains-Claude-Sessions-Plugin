@@ -82,6 +82,9 @@ class ReviewGateTest {
 
         assertEquals(SendGate.TabClosed("sess-1", "Fix auth flow"), result)
         assertEquals("The tab for Fix auth flow is closed", result.problem())
+        // Refused outright: "send anyway" cannot succeed when there is nothing to type into,
+        // and offering it produced an endless confirm loop.
+        assertFalse(result.needsConfirmation)
     }
 
     @Test
