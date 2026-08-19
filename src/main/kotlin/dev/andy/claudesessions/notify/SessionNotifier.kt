@@ -15,7 +15,8 @@ import dev.andy.claudesessions.data.SessionIndexer
 import dev.andy.claudesessions.hooks.HookEvent
 import dev.andy.claudesessions.hooks.HookEventBus
 import dev.andy.claudesessions.settings.ClaudeSessionsSettings
-import dev.andy.claudesessions.terminal.ClaudeTerminalLauncher
+import dev.andy.claudesessions.terminal.ClaudeTerminalTabs
+import dev.andy.claudesessions.terminal.SessionOpener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -33,6 +34,11 @@ import java.nio.file.Path
  * - An IDE balloon, which is what you see when the IDE *is* focused, and which persists in
  *   the Notifications tool window so a turn that ended while you were in another editor is
  *   not lost. Its display can be tuned per group under Settings | Notifications.
+ *
+ * The hook log is one file per machine, so every Claude on it arrives here: the desktop app, a
+ * plain terminal, another IDE window. By default only sessions running in one of this IDE's own
+ * tabs are announced — see [ownerOf] — because those are the ones this window is watching for
+ * you. `notifyOnlyIdeSessions` turns that filter off.
  */
 @Service(Service.Level.APP)
 internal class SessionNotifier(private val scope: CoroutineScope) {
@@ -54,6 +60,10 @@ internal class SessionNotifier(private val scope: CoroutineScope) {
             event.eventName == "Notification"
         if (!interesting || !settings.notifiesAnything) return
 
+        // Before resolving the name, which is the only part of this path that reads a file.
+        val owner = ownerOf(event)
+        if (owner == null && settings.notifyOnlyIdeSessions) return
+
         val notice = SessionNotices.from(
             event = event,
             sessionName = withContext(Dispatchers.IO) { nameFor(event) },
@@ -61,9 +71,30 @@ internal class SessionNotifier(private val scope: CoroutineScope) {
             notifyOnPrompt = settings.notifyOnPrompt,
         ) ?: return
 
-        val project = projectFor(notice.cwd)
-        show(notice, project)
+        // The tab's own project where there is one: it owns the session outright, whereas
+        // matching directories only says the session is somewhere inside the project.
+        show(notice, owner ?: projectFor(notice.cwd))
     }
+
+    /**
+     * The open project whose tab is running this session, or null if no window here is.
+     *
+     * A tab is the only honest evidence that the IDE started a session: the terminal was
+     * launched from this window and dies with it. A `+` tab whose session id is not known yet
+     * counts too, on the strength of its launch directory — see
+     * [ClaudeTerminalTabs.hasPendingLinkIn] — or the first turn of every new session would go
+     * unannounced.
+     *
+     * Sessions opened as a fork or through the background-agents view keep a synthetic tab id
+     * and so are not recognised, exactly as they are not recognised as review targets.
+     */
+    private fun ownerOf(event: HookEvent): Project? =
+        ProjectManager.getInstance().openProjects
+            .filter { !it.isDisposed }
+            .firstOrNull { project ->
+                val tabs = project.service<ClaudeTerminalTabs>()
+                tabs.find(event.sessionId) != null || tabs.hasPendingLinkIn(event.cwd)
+            }
 
     /**
      * What to call the session.
@@ -138,12 +169,9 @@ internal class SessionNotifier(private val scope: CoroutineScope) {
 
     private fun openSession(project: Project, notice: SessionNotice) {
         ToolWindowManager.getInstance(project).getToolWindow("Claude Sessions")?.activate(null)
-        ClaudeTerminalLauncher.openOrFocus(
-            project = project,
-            sessionId = notice.sessionId,
-            workingDirectory = notice.cwd,
-            sessionTitle = notice.sessionName,
-        )
+        // Through the guarded path: an unguarded --resume here could seize a session that
+        // an external terminal still owns, or one the CLI refuses to resume.
+        SessionOpener.openById(project, notice.sessionId, notice.cwd, notice.sessionName)
     }
 
     private companion object {

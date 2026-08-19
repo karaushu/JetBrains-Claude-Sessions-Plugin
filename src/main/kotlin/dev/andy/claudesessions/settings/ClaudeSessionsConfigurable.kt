@@ -35,6 +35,17 @@ internal class ClaudeSessionsConfigurable : BoundConfigurable("Claude Sessions")
                     )
             }
             row {
+                checkBox("Only sessions started in this IDE")
+                    .bindSelected(settings::notifyOnlyIdeSessions)
+                    .comment(
+                        "Claude's hooks report every session on the machine — the desktop app, a " +
+                            "terminal outside the IDE, another IDE window. With this on, only " +
+                            "sessions running in this window's own tabs are announced. Sessions " +
+                            "opened as a copy, or through the background-agents view, are not " +
+                            "recognised as this window's and stay silent too.",
+                    )
+            }
+            row {
                 comment(
                     "System notifications appear only while the IDE is <b>not</b> the active " +
                         "application — the platform suppresses them otherwise, which is what " +

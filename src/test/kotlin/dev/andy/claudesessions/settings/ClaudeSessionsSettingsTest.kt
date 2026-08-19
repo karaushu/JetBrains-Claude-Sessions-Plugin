@@ -17,6 +17,15 @@ class ClaudeSessionsSettingsTest {
     }
 
     @Test
+    fun `notifications are on by default, and only for this IDE's own sessions`() {
+        val settings = ClaudeSessionsSettings()
+        assertTrue(settings.notifyOnTurnEnd)
+        assertTrue(settings.notifyOnPrompt)
+        // The hook log carries every Claude on the machine, including the desktop app.
+        assertTrue(settings.notifyOnlyIdeSessions)
+    }
+
+    @Test
     fun `an interval below Claude's write floor is raised to it`() {
         // Anything shorter starts a process that Claude answers by discarding the result.
         val settings = ClaudeSessionsSettings()
@@ -56,10 +65,12 @@ class ClaudeSessionsSettingsTest {
         val original = ClaudeSessionsSettings().apply {
             usageAutoRefresh = false
             usageRefreshMinutes = 45
+            notifyOnlyIdeSessions = false
         }
         val restored = ClaudeSessionsSettings().apply { loadState(original.state) }
 
         assertEquals(false, restored.usageAutoRefresh)
         assertEquals(45, restored.usageRefreshMinutes)
+        assertEquals(false, restored.notifyOnlyIdeSessions)
     }
 }
