@@ -1,10 +1,13 @@
 package dev.andy.claudesessions.data
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 
@@ -23,6 +26,14 @@ class GitWorktreesTest {
         entry.resolve("gitdir").writeText("${worktree.resolve(".git")}\n")
         // A linked worktree's .git is a file pointing back at the registry entry.
         worktree.resolve(".git").writeText("gitdir: $entry\n")
+    }
+
+    /** The layout git >= 2.48 writes with worktree.useRelativePaths, default since 2.51. */
+    private fun registerRelative(main: Path, name: String, worktree: Path) {
+        worktree.createDirectories()
+        val entry = main.resolve(".git/worktrees/$name").also { it.createDirectories() }
+        entry.resolve("gitdir").writeText("${entry.relativize(worktree.resolve(".git"))}\n")
+        worktree.resolve(".git").writeText("gitdir: ${worktree.relativize(entry)}\n")
     }
 
     @Test
@@ -81,6 +92,29 @@ class GitWorktreesTest {
     }
 
     @Test
+    fun `finds a worktree registered with relative paths`(@TempDir root: Path) {
+        val main = mainRepo(root)
+        val elsewhere = root.resolve("repo-worktrees/feature-1")
+        registerRelative(main, "feature-1", elsewhere)
+
+        val found = GitWorktrees.of(main)
+        assertEquals(listOf("feature-1"), found.map { it.name })
+        assertEquals(elsewhere, found.single().path)
+    }
+
+    @Test
+    fun `opening a worktree with relative pointers finds the main tree and siblings`(@TempDir root: Path) {
+        val main = mainRepo(root)
+        val first = root.resolve("wt/first")
+        val second = root.resolve("wt/second")
+        registerRelative(main, "first", first)
+        registerRelative(main, "second", second)
+
+        val found = GitWorktrees.of(first)
+        assertEquals(setOf("repo", "second"), found.map { it.name }.toSet())
+    }
+
+    @Test
     fun `a registry entry pointing nowhere is skipped`(@TempDir root: Path) {
         val main = mainRepo(root)
         val entry = main.resolve(".git/worktrees/stale").also { it.createDirectories() }
@@ -95,6 +129,32 @@ class GitWorktreesTest {
         val main = mainRepo(root)
         main.resolve(".git/worktrees/broken").createDirectories()
         assertTrue(GitWorktrees.of(main).isEmpty())
+    }
+
+    @Test
+    fun `an unchanged registry serves the cached list`(@TempDir root: Path) {
+        val main = mainRepo(root)
+        register(main, "only", root.resolve("wt/only"))
+
+        val first = GitWorktrees.of(main)
+        assertSame(first, GitWorktrees.of(main), "same registry mtime must return the cached list")
+    }
+
+    @Test
+    fun `a newly registered worktree invalidates the cached list`(@TempDir root: Path) {
+        val main = mainRepo(root)
+        register(main, "first", root.resolve("wt/first"))
+        assertEquals(setOf("first"), GitWorktrees.of(main).map { it.name }.toSet())
+
+        register(main, "second", root.resolve("wt/second"))
+        // Registration changes the registry directory's mtime; nudge it forward so two
+        // writes inside the same millisecond cannot hide the change from the test.
+        Files.setLastModifiedTime(
+            main.resolve(".git/worktrees"),
+            FileTime.fromMillis(System.currentTimeMillis() + 2_000),
+        )
+
+        assertEquals(setOf("first", "second"), GitWorktrees.of(main).map { it.name }.toSet())
     }
 
     @Test

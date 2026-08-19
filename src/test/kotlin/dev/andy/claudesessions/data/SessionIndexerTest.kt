@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import kotlin.io.path.appendText
 import kotlin.io.path.writeText
 
 class SessionIndexerTest {
@@ -150,6 +151,92 @@ class SessionIndexerTest {
     @Test
     fun `missing directory yields no sessions`(@TempDir dir: Path) {
         assertTrue(SessionIndexer().indexDirectory(dir.resolve("nope")).isEmpty())
+    }
+
+    @Test
+    fun `an appended record folds into the cached summary`(@TempDir dir: Path) {
+        val file = write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","cwd":"/tmp/p","gitBranch":"main","timestamp":"2026-07-01T10:00:00Z"}""",
+            """{"type":"ai-title","aiTitle":"First"}""",
+        )
+        val indexer = SessionIndexer(minRescanIntervalNanos = 0)
+        assertEquals("First", indexer.summarise(file)!!.title)
+
+        file.appendText("""{"type":"ai-title","aiTitle":"Second"}""" + "\n")
+        val resumed = indexer.summarise(file)!!
+        assertEquals("Second", resumed.title)
+        // First-occurrence fields survive the resumed fold.
+        assertEquals("/tmp/p", resumed.cwd)
+        assertEquals("main", resumed.gitBranch)
+        assertEquals("2026-07-01T10:00:00Z", resumed.startedAt.toString())
+    }
+
+    @Test
+    fun `a record torn across two appends is parsed once it completes`(@TempDir dir: Path) {
+        // The CLI can flush a line in pieces; the scanner must not consume the fragment.
+        val file = write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","cwd":"/tmp/p","timestamp":"2026-07-01T10:00:00Z"}""",
+        )
+        val indexer = SessionIndexer(minRescanIntervalNanos = 0)
+        assertNull(indexer.summarise(file)!!.title)
+
+        file.appendText("""{"type":"ai-title","ai""")
+        assertNull(indexer.summarise(file)!!.title)
+
+        file.appendText("""Title":"Completed"}""" + "\n")
+        assertEquals("Completed", indexer.summarise(file)!!.title)
+    }
+
+    @Test
+    fun `an oversized appended line is skipped without breaking later records`(@TempDir dir: Path) {
+        val file = write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","cwd":"/tmp/p","timestamp":"2026-07-01T10:00:00Z"}""",
+        )
+        val indexer = SessionIndexer(minRescanIntervalNanos = 0)
+        indexer.summarise(file)
+
+        val huge = """{"type":"assistant","blob":"${"A".repeat(200_000)}"}"""
+        file.appendText(huge + "\n" + """{"type":"ai-title","aiTitle":"After blob"}""" + "\n")
+        assertEquals("After blob", indexer.summarise(file)!!.title)
+    }
+
+    @Test
+    fun `a rewritten shorter file is rescanned from the start`(@TempDir dir: Path) {
+        // Compaction rewrites the transcript smaller; resuming an offset into it would
+        // read garbage, so a shrink must restart the fold.
+        val file = write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","cwd":"/tmp/before-the-rewrite","timestamp":"2026-07-01T10:00:00Z"}""",
+            """{"type":"ai-title","aiTitle":"Original title, fairly long"}""",
+        )
+        val indexer = SessionIndexer(minRescanIntervalNanos = 0)
+        assertEquals("Original title, fairly long", indexer.summarise(file)!!.title)
+
+        write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","cwd":"/tmp/after","timestamp":"2026-07-02T10:00:00Z"}""",
+            """{"type":"ai-title","aiTitle":"Compacted"}""",
+        )
+        val rescanned = indexer.summarise(file)!!
+        assertEquals("Compacted", rescanned.title)
+        assertEquals("/tmp/after", rescanned.cwd)
+    }
+
+    @Test
+    fun `a first record larger than one read chunk is still parsed`(@TempDir dir: Path) {
+        // 100k chars crosses the 64KB chunk boundary inside a single line.
+        val padding = "B".repeat(100_000)
+        write(
+            dir,
+            """{"type":"user","sessionId":"$sessionId","pad":"$padding","cwd":"/tmp/chunky","gitBranch":"main","timestamp":"2026-07-01T10:00:00Z"}""",
+        )
+
+        val summary = SessionIndexer().indexDirectory(dir).single()
+        assertEquals("/tmp/chunky", summary.cwd)
+        assertEquals("main", summary.gitBranch)
     }
 
     @Test

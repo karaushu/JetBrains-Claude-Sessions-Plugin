@@ -92,22 +92,7 @@ internal class LiveSessionWatcher {
             }
         }
 
-        // Cheap sanity check; covers the CLI, the desktop app and the agent SDK binaries.
-        val command = info.command().orElse(null)
-        if (command != null && !command.contains("claude", ignoreCase = true)) return false
-
-        return true
-    }
-
-    private fun JsonObject.string(name: String): String? {
-        val element = get(name) ?: return null
-        if (element.isJsonNull || !element.isJsonPrimitive) return null
-        return runCatching { element.asString }.getOrNull()?.takeIf { it.isNotBlank() }
-    }
-
-    private fun JsonObject.long(name: String): Long? {
-        val element = get(name) ?: return null
-        if (element.isJsonNull || !element.isJsonPrimitive) return null
-        return runCatching { element.asLong }.getOrNull()
+        // Cheap sanity check; covers native binaries and npm installs running under node.
+        return ClaudeProcesses.looksLike(handle)
     }
 }

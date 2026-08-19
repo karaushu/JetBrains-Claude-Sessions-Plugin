@@ -68,6 +68,23 @@ class SessionStopperTest {
     }
 
     @Test
+    fun `a script runtime is recognized by its arguments`() {
+        // An npm-installed CLI runs as `node <path>/claude.js`: the needle appears only in
+        // the arguments, never in the executable path.
+        val process = ProcessBuilder("sleep", "30").start()
+        try {
+            val result = SessionStopper.stop(process.pid(), requireCommandContaining = "30")
+            assertEquals(SessionStopper.Result.Stopped, result)
+            assertFalse(process.isAlive, "process should have exited")
+        } finally {
+            if (process.isAlive) {
+                process.destroyForcibly()
+                process.waitFor()
+            }
+        }
+    }
+
+    @Test
     fun `a process that ignores SIGTERM is escalated`() {
         // 'trap' makes the shell ignore SIGTERM; only destroyForcibly can end it.
         val process = ProcessBuilder("/bin/sh", "-c", "trap '' TERM; sleep 30").start()
