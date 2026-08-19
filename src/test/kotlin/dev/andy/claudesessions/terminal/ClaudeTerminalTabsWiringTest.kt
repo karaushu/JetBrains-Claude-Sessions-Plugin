@@ -41,6 +41,25 @@ class ClaudeTerminalTabsWiringTest {
     }
 
     @Test
+    fun `a launch directory is claimed only while a tab there is waiting for its session`() {
+        // What lets a notification through for the first turn of a '+' tab: the session id is
+        // not known yet, so the directory is the only thing that says the tab started it.
+        val tabs = ClaudeTerminalTabs()
+        assertFalse(tabs.hasPendingLinkIn("/repo"))
+
+        val file = newSessionFile()
+        tabs.remember(file)
+        tabs.awaitLink(file, "/repo", 1_000L)
+
+        assertTrue(tabs.hasPendingLinkIn("/repo"))
+        assertFalse(tabs.hasPendingLinkIn("/other"), "another directory is not ours")
+        assertFalse(tabs.hasPendingLinkIn(null), "a session with no cwd claims nothing")
+
+        tabs.resolveLink(tabs.pendingLinks().single(), "real-session-id")
+        assertFalse(tabs.hasPendingLinkIn("/repo"), "an adopted tab is found by id instead")
+    }
+
+    @Test
     fun `resolving a link rebinds the tab to the real session id`() {
         val tabs = ClaudeTerminalTabs()
         val file = newSessionFile()

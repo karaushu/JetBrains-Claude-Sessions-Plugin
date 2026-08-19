@@ -20,10 +20,11 @@ class SessionAdoptionTest {
         sessionCwd: String? = cwd,
         live: Boolean = false,
         entrypoint: String = "cli",
+        transcript: Path = Path.of("/tmp/$id.jsonl"),
     ) = SessionItem(
         summary = SessionSummary(
             sessionId = id,
-            transcript = Path.of("/tmp/$id.jsonl"),
+            transcript = transcript,
             cwd = sessionCwd,
             gitBranch = "staging",
             title = null,
@@ -81,9 +82,36 @@ class SessionAdoptionTest {
     }
 
     @Test
-    fun `accepts a session with no recorded cwd, since it was found where we looked`() {
-        val match = pick(listOf(session("nocwd", Instant.parse("2026-07-27T19:00:03Z"), sessionCwd = null)))
+    fun `accepts a no-cwd session whose transcript sits in the launch directory's folder`() {
+        val match = pick(
+            listOf(
+                session(
+                    "nocwd",
+                    Instant.parse("2026-07-27T19:00:03Z"),
+                    sessionCwd = null,
+                    transcript = Path.of("/claude/projects/-Users-dev-projects-web-admin/nocwd.jsonl"),
+                ),
+            ),
+        )
         assertEquals("nocwd", match?.sessionId)
+    }
+
+    @Test
+    fun `rejects a no-cwd session from another project's folder`() {
+        // With "show all projects" on the candidate list spans every project, so "we found
+        // it while scanning" no longer implies "it is ours".
+        assertNull(
+            pick(
+                listOf(
+                    session(
+                        "foreign",
+                        Instant.parse("2026-07-27T19:00:03Z"),
+                        sessionCwd = null,
+                        transcript = Path.of("/claude/projects/-other-repo/foreign.jsonl"),
+                    ),
+                ),
+            ),
+        )
     }
 
     @Test

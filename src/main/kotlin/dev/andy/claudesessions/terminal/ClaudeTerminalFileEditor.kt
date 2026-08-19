@@ -53,11 +53,18 @@ internal class ClaudeTerminalFileEditor(
      */
     override fun dispose() {
         ApplicationManager.getApplication().invokeLater {
-            if (project.isDisposed) return@invokeLater
+            if (project.isDisposed) {
+                // Too late for project services, but the terminal's coroutine scope — and
+                // the shell in it — is ours to stop regardless.
+                file.view.coroutineScope.cancel("Claude Sessions: project closed")
+                return@invokeLater
+            }
             val stillOpen = FileEditorManager.getInstance(project).openFiles.any { it === file }
             if (stillOpen) return@invokeLater
 
-            project.service<ClaudeTerminalTabs>().forget(file.sessionId)
+            // By instance, not by id: the session can be reopened as a new file while this
+            // disposal sits in the queue, and forgetting by id would orphan that fresh tab.
+            project.service<ClaudeTerminalTabs>().forget(file)
             file.view.coroutineScope.cancel("Claude Sessions: editor tab closed")
         }
     }

@@ -47,6 +47,17 @@ internal class ClaudeTerminalTabs {
         focusOrder.remove(sessionId)
     }
 
+    /**
+     * Forgets [file] only while it is still the registered tab for its id. Editor disposal
+     * is deferred through the event queue, and the session can be reopened as a *new* file
+     * meanwhile — forgetting by id alone would delete that fresh tab's registration.
+     */
+    fun forget(file: ClaudeTerminalFile) {
+        bySessionId.remove(file.sessionId, file)
+        pending.removeIf { it.file === file }
+        if (!bySessionId.containsKey(file.sessionId)) focusOrder.remove(file.sessionId)
+    }
+
     fun noteFocused(sessionId: String) {
         focusOrder.remove(sessionId)
         focusOrder.add(0, sessionId)
@@ -63,6 +74,17 @@ internal class ClaudeTerminalTabs {
     }
 
     fun pendingLinks(): List<PendingLink> = pending.toList()
+
+    /**
+     * True while a `+` tab in [workingDirectory] is still waiting for its session id.
+     *
+     * Adoption needs the session to appear in the list, which only happens while the tool
+     * window is refreshing. Until then the tab owns a session whose id nobody knows, so a
+     * caller asking "is this session mine?" gets a yes on the strength of the directory
+     * alone. That is the same evidence [SessionAdoption] uses, minus the transcript.
+     */
+    fun hasPendingLinkIn(workingDirectory: String?): Boolean =
+        workingDirectory != null && pending.any { it.workingDirectory == workingDirectory }
 
     /** Rebinds the tab from its synthetic key to the session id Claude assigned. */
     fun resolveLink(link: PendingLink, realSessionId: String) {
