@@ -1,13 +1,18 @@
 package dev.andy.claudesessions.usage
 
-import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import dev.andy.claudesessions.data.array
+import dev.andy.claudesessions.data.int
+import dev.andy.claudesessions.data.long
+import dev.andy.claudesessions.data.obj
+import dev.andy.claudesessions.data.string
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import java.time.Instant
-import kotlin.io.path.exists
 
 /**
  * Reads the usage limits Claude caches in `~/.claude.json`.
@@ -23,14 +28,42 @@ internal class UsageReader(
     private val file: Path = Path.of(System.getProperty("user.home"), ".claude.json"),
 ) {
 
+    /** The file identity a snapshot was parsed from, so an unchanged file is not re-parsed. */
+    private data class Stamp(val size: Long, val mtime: FileTime)
+
+    private val lock = Any()
+    private var cachedStamp: Stamp? = null
+    private var cachedSnapshot: UsageSnapshot? = null
+
     fun read(): UsageSnapshot? {
-        if (!file.exists()) return null
+        // The file is the whole account config and grows to megabytes; a stat is enough to
+        // notice it has not changed since the last parse.
+        val stamp = stat() ?: run {
+            synchronized(lock) {
+                cachedStamp = null
+                cachedSnapshot = null
+            }
+            return null
+        }
+        synchronized(lock) {
+            if (stamp == cachedStamp) return cachedSnapshot
+        }
 
         val text = runCatching { Files.readString(file, StandardCharsets.UTF_8) }.getOrNull() ?: return null
-        val root = runCatching { JsonParser.parseString(text) as? JsonObject }.getOrNull() ?: return null
-
-        return parse(root)
+        // A read landing mid-write fails to parse; leave the cache alone so the next call retries.
+        val element = runCatching { JsonParser.parseString(text) }.getOrNull() ?: return null
+        val snapshot = (element as? JsonObject)?.let { parse(it) }
+        synchronized(lock) {
+            cachedStamp = stamp
+            cachedSnapshot = snapshot
+        }
+        return snapshot
     }
+
+    private fun stat(): Stamp? = runCatching {
+        val attributes = Files.readAttributes(file, BasicFileAttributes::class.java)
+        Stamp(attributes.size(), attributes.lastModifiedTime())
+    }.getOrNull()
 
     fun parse(root: JsonObject): UsageSnapshot? {
         val cached = root.obj("cachedUsageUtilization") ?: return null
@@ -58,28 +91,4 @@ internal class UsageReader(
         return UsageSnapshot(limits, Instant.ofEpochMilli(fetchedAtMs))
     }
 
-    // Gson's getAsJsonObject/getAsJsonArray cast, so a JSON null throws. These fields are
-    // routinely null in the real payload — `scope` is null for every unscoped window — so
-    // every access has to tolerate it.
-    private fun JsonObject.obj(name: String): JsonObject? = get(name) as? JsonObject
-
-    private fun JsonObject.array(name: String): JsonArray? = get(name) as? JsonArray
-
-    private fun JsonObject.string(name: String): String? {
-        val element = get(name) ?: return null
-        if (!element.isJsonPrimitive) return null
-        return runCatching { element.asString }.getOrNull()?.takeIf { it.isNotBlank() }
-    }
-
-    private fun JsonObject.int(name: String): Int? {
-        val element = get(name) ?: return null
-        if (!element.isJsonPrimitive) return null
-        return runCatching { element.asInt }.getOrNull()
-    }
-
-    private fun JsonObject.long(name: String): Long? {
-        val element = get(name) ?: return null
-        if (!element.isJsonPrimitive) return null
-        return runCatching { element.asLong }.getOrNull()
-    }
 }

@@ -4,10 +4,14 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
+import kotlin.io.path.writeText
 
 class UsageReaderTest {
 
@@ -119,6 +123,44 @@ class UsageReaderTest {
         )!!
         assertEquals("Monthly special", snapshot.limits.single().label)
         assertEquals(7, snapshot.limits.single().percent)
+    }
+
+    @Test
+    fun `a missing file yields null`(@TempDir dir: Path) {
+        assertNull(UsageReader(dir.resolve("absent.json")).read())
+    }
+
+    @Test
+    fun `a torn write yields null and the next read recovers`(@TempDir dir: Path) {
+        val file = dir.resolve("claude.json")
+        file.writeText(real.take(50))
+        val onDisk = UsageReader(file)
+        assertNull(onDisk.read())
+
+        file.writeText(real)
+        assertEquals(3, onDisk.read()!!.limits.size)
+    }
+
+    @Test
+    fun `an unchanged file is served from the cache, not re-parsed`(@TempDir dir: Path) {
+        val file = dir.resolve("claude.json")
+        file.writeText(real)
+        val onDisk = UsageReader(file)
+
+        val first = onDisk.read()!!
+        assertSame(first, onDisk.read(), "same (size, mtime) must return the cached snapshot")
+    }
+
+    @Test
+    fun `a rewritten file is re-read`(@TempDir dir: Path) {
+        val file = dir.resolve("claude.json")
+        file.writeText(real)
+        val onDisk = UsageReader(file)
+        assertEquals(40, onDisk.read()!!.limits.first().percent)
+
+        // A different length guarantees a new (size, mtime) stamp on any filesystem.
+        file.writeText(real.replace(""""percent": 40""", """"percent": 4"""))
+        assertEquals(4, onDisk.read()!!.limits.first().percent)
     }
 
     @Test
