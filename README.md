@@ -18,14 +18,15 @@ waiting for input, and opens any of them as an editor tab.
   `~/.claude/claudesessions/archive/` and offers Undo — no confirmation dialog, but nothing
   is destroyed either.
 - **System notifications** when a turn ends or Claude needs input, each switchable on its
-  own. macOS shows them only while the IDE is not the active application; inside the IDE
-  they arrive as balloons.
+  own, and only for sessions running in this IDE's own tabs. macOS shows them only while the
+  IDE is not the active application; inside the IDE they arrive as balloons.
 - **Review notes in the diff viewer.** Hover a line in a side-by-side diff and a `+` appears
   beside the line number. Write what needs fixing, add as many notes across as many files as you
   like, then send the whole set to a session with one button — which always names the session it
-  is about to send to. The agent answers each note under the line it belongs to; `×` closes a
-  note, writing on it again reopens it and sends it back with its history. A note the agent never
-  answered says so rather than pretending to be done.
+  is about to send to. `Enter` adds a note, `Option+Enter` or `Cmd+Enter` starts a new line. The
+  agent answers each note under the line it belongs to, in the language the note is written in;
+  `×` closes a note, writing on it again reopens it and sends it back with its history. A note
+  the agent never answered says so rather than pretending to be done.
 - **Usage limits** in the toolbar: the 5-hour percentage, with a dropdown showing every
   window (5-hour, weekly all-models, weekly per-model).
 - **Settings** under *Settings → Tools → Claude Sessions*, or the gear in the tool window:
@@ -154,8 +155,16 @@ Details that are not obvious:
   accumulated turns at once.
 - **One reader, application-wide.** Two would each reset to the start when the other truncated
   the log and replay each other's events, and with several projects open the same session
-  finishing would be announced once per window. A notification is attributed to the open
-  project whose base path most closely contains the session's cwd.
+  finishing would be announced once per window. A notification is attributed to the project
+  whose tab is running the session, or failing that to the open project whose base path most
+  closely contains the session's cwd.
+- **Only this IDE's sessions, by default.** The log is one file per machine, so the desktop
+  app, a plain terminal and every other IDE window all arrive here too. A session counts as
+  this window's when one of its tabs is running it — plus a `+` tab that has not been matched
+  to its session yet, which is recognised by its launch directory, or the first turn of every
+  new session would be silent. A session opened as a copy, or through the background-agents
+  view, keeps a synthetic tab id and is not recognised. Turn the filter off under
+  **Settings | Tools | Claude Sessions** to hear about every Claude on the machine.
 - **Claude has its own notifications** (`preferredNotifChannel`, `inputNeededNotifEnabled` in
   `~/.claude/settings.json`). If those already reach you, expect two for a needs-input event
   and turn one side off.
@@ -236,8 +245,12 @@ data/SessionPlaceholders.kt     rows for live sessions with no transcript yet
   application bundle, and `NSUserNotificationCenter` — which the platform uses — attributes
   notifications by bundle identifier. Everything up to the hand-off is exercised there; the
   banner itself only appears from an installed WebStorm.
-- A session running in a worktree outside its project matches no open project, so its
-  notification arrives without the *Open Session* action.
+- A session running in a worktree outside its project matches no open project by path, so
+  unless one of its tabs is running it, its notification arrives without the *Open Session*
+  action.
+- A session opened as a **copy** of another, or through the **background-agents** view, keeps a
+  synthetic tab id, so this IDE does not recognise it as its own. While notifications are
+  filtered to this IDE's sessions — the default — those two stay silent.
 
 ## Licence
 
